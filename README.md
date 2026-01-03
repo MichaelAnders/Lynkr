@@ -1,4 +1,4 @@
-# Lynkr - Production-Ready Claude Code Proxy with Multi-Provider Support, MCP Integration & Token Optimization
+# Lynkr -  Claude Code Proxy with Multi-Provider Support, MCP Integration & Token Optimization
 
 [![npm version](https://img.shields.io/npm/v/lynkr.svg)](https://www.npmjs.com/package/lynkr "Lynkr NPM Package - Claude Code Proxy Server")
 [![Homebrew Tap](https://img.shields.io/badge/homebrew-lynkr-brightgreen.svg)](https://github.com/vishalveerareddy123/homebrew-lynkr "Install Lynkr via Homebrew")
