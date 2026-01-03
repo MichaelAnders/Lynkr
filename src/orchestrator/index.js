@@ -10,6 +10,7 @@ const tokens = require("../utils/tokens");
 const systemPrompt = require("../prompts/system");
 const historyCompression = require("../context/compression");
 const tokenBudget = require("../context/budget");
+const { classifyRequestType, selectToolsSmartly } = require("../tools/smart-selection");
 
 const DROP_KEYS = new Set([
   "provider",
@@ -997,6 +998,28 @@ function sanitizePayload(payload) {
     delete clean.tool_choice;
   } else if (clean.tool_choice === undefined || clean.tool_choice === null) {
     delete clean.tool_choice;
+  }
+
+  // Smart tool selection (universal, applies to all providers)
+  if (config.smartToolSelection?.enabled && Array.isArray(clean.tools) && clean.tools.length > 0) {
+    const classification = classifyRequestType(clean);
+    const selectedTools = selectToolsSmartly(clean.tools, classification, {
+      provider: providerType,
+      tokenBudget: config.smartToolSelection.tokenBudget,
+      config: config.smartToolSelection
+    });
+
+    // Only log if tools were actually filtered (avoid logging overhead)
+    if (selectedTools.length !== clean.tools.length) {
+      logger.info({
+        requestType: classification.type,
+        originalCount: clean.tools.length,
+        selectedCount: selectedTools.length,
+        provider: providerType
+      }, "Smart tool selection applied");
+    }
+
+    clean.tools = selectedTools.length > 0 ? selectedTools : undefined;
   }
 
   clean.stream = payload.stream ?? false;

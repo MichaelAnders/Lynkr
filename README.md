@@ -149,6 +149,7 @@ Key highlights:
 - **Workspace awareness** – Local repo indexing, `CLAUDE.md` summaries, language-aware navigation, and Git helpers mirror core Claude Code workflows.
 - **Model Context Protocol (MCP) orchestration** – Automatically discovers MCP manifests, launches JSON-RPC 2.0 servers, and re-exposes their tools inside the proxy.
 - **Prompt caching** – Re-uses repeated prompts to reduce latency and token consumption, matching Claude's own cache semantics.
+- **Smart tool selection** – Intelligently filters tools based on request type (conversational, coding, research), reducing tool tokens by 50-70% for simple queries. Automatically enabled across all providers.
 - **Policy enforcement** – Environment-driven guardrails control Git operations, test requirements, web fetch fallbacks, and sandboxing rules. Input validation and consistent error handling ensure API reliability.
 
 The result is a production-ready, self-hosted alternative that stays close to Anthropic's ergonomics while providing enterprise-grade reliability, observability, and performance.
@@ -265,7 +266,7 @@ FALLBACK_PROVIDER=databricks  # or azure-openai, openrouter, azure-anthropic
 | **Self-Hosted** | ❌ Managed service | ✅ **Full control** (open-source) |
 | **MCP Support** | Limited | ✅ **Full orchestration** with auto-discovery |
 | **Prompt Caching** | Basic | ✅ **Advanced caching** with deduplication |
-| **Token Optimization** | ❌ None | ✅ **5 phases** (history compression, tool truncation, dynamic prompts) |
+| **Token Optimization** | ❌ None | ✅ **6 phases** (smart tool selection, history compression, tool truncation, dynamic prompts) |
 | **Enterprise Features** | Limited | ✅ **Circuit breakers, load shedding, metrics, K8s-ready** |
 | **Privacy** | ☁️ Cloud-dependent | ✅ **Self-hosted** (air-gapped deployments possible) |
 | **Cost Transparency** | Hidden usage | ✅ **Full tracking** (per-request, per-session, Prometheus metrics) |

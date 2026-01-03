@@ -150,6 +150,13 @@ const tokenBudgetWarning = Number.parseInt(process.env.TOKEN_BUDGET_WARNING ?? "
 const tokenBudgetMax = Number.parseInt(process.env.TOKEN_BUDGET_MAX ?? "180000", 10);
 const tokenBudgetEnforcement = process.env.TOKEN_BUDGET_ENFORCEMENT !== "false"; // default true
 
+// Smart tool selection configuration (always enabled)
+const smartToolSelectionMode = (process.env.SMART_TOOL_SELECTION_MODE ?? "heuristic").toLowerCase();
+const smartToolSelectionTokenBudget = Number.parseInt(
+  process.env.SMART_TOOL_SELECTION_TOKEN_BUDGET ?? "2500",
+  10
+);
+
 // Only require Databricks credentials if it's the primary provider or used as fallback
 if (modelProvider === "databricks" && (!rawBaseUrl || !apiKey)) {
   throw new Error("Set DATABRICKS_API_BASE and DATABRICKS_API_KEY before starting the proxy.");
@@ -576,6 +583,12 @@ const config = {
     warning: tokenBudgetWarning,
     max: tokenBudgetMax,
     enforcement: tokenBudgetEnforcement,
+  },
+  smartToolSelection: {
+    enabled: true,  // HARDCODED - always enabled
+    mode: smartToolSelectionMode,
+    tokenBudget: smartToolSelectionTokenBudget,
+    minimalMode: false,  // HARDCODED - disabled
   },
 };
 
