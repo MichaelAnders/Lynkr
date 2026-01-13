@@ -15,13 +15,37 @@ const logger = require("../logger");
  * @returns {Object} Anthropic format request
  */
 function convertOpenAIToAnthropic(openaiRequest) {
-  const { messages, model, temperature, max_tokens, top_p, stream, tools, tool_choice } = openaiRequest;
+  const { messages, input, model, temperature, max_tokens, top_p, stream, tools, tool_choice } = openaiRequest;
+
+  // Cursor's inline edit uses "input" instead of "messages"
+  const messageArray = messages || input;
+
+  // Validate messages/input field
+  if (!messageArray) {
+    logger.error({
+      openaiRequest: JSON.stringify(openaiRequest),
+      hasMessages: !!messages,
+      hasInput: !!input,
+      messagesType: typeof messages,
+      inputType: typeof input
+    }, "convertOpenAIToAnthropic: neither messages nor input field present");
+    throw new Error("OpenAI request missing 'messages' or 'input' field");
+  }
+
+  if (!Array.isArray(messageArray)) {
+    logger.error({
+      messageArray: JSON.stringify(messageArray),
+      messageArrayType: typeof messageArray,
+      isArray: Array.isArray(messageArray)
+    }, "convertOpenAIToAnthropic: messages/input is not an array");
+    throw new Error(`OpenAI request 'messages'/'input' must be an array, got ${typeof messageArray}`);
+  }
 
   // Extract system message if present
   let system = null;
   const anthropicMessages = [];
 
-  for (const msg of messages) {
+  for (const msg of messageArray) {
     if (msg.role === "system") {
       // Anthropic uses a separate system field
       system = msg.content;
@@ -150,7 +174,7 @@ function convertOpenAIToAnthropic(openaiRequest) {
   }
 
   logger.debug({
-    openaiMessageCount: messages.length,
+    openaiMessageCount: messageArray.length,
     anthropicMessageCount: anthropicMessages.length,
     hasSystem: !!system,
     hasTools: !!anthropicTools,
@@ -167,7 +191,17 @@ function convertOpenAIToAnthropic(openaiRequest) {
  * @returns {Object} OpenAI format response
  */
 function convertAnthropicToOpenAI(anthropicResponse, model = "claude-3-5-sonnet-20241022") {
+  // Validate input
+  if (!anthropicResponse) {
+    throw new Error("convertAnthropicToOpenAI: anthropicResponse is undefined or null");
+  }
+
   const { id, content, stop_reason, usage } = anthropicResponse;
+
+  // Validate required fields
+  if (!content || !Array.isArray(content)) {
+    throw new Error(`convertAnthropicToOpenAI: invalid content field (got ${typeof content})`);
+  }
 
   // Convert content blocks to OpenAI format
   let messageContent = "";

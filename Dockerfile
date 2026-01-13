@@ -41,18 +41,18 @@ RUN addgroup -g 1001 -S nodejs && \
     chown -R nodejs:nodejs /app
 
 # Expose the proxy port and searxng port
-EXPOSE 8080
+EXPOSE 8081
 EXPOSE 8888
 
 # Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health/live || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8081/health/live || exit 1
 
 # Provide helpful defaults for required environment variables (override at runtime)
 # Core Configuration
 ENV MODEL_PROVIDER="databricks" \
     TOOL_EXECUTION_MODE="server" \
-    PORT="8080" \
+    PORT="8081" \
     LOG_LEVEL="info" \
     WORKSPACE_ROOT="/workspace" \
     WEB_SEARCH_ENDPOINT="http://localhost:8888/search"
@@ -66,12 +66,15 @@ ENV DATABRICKS_API_BASE="https://example.cloud.databricks.com" \
 ENV PREFER_OLLAMA="false" \
     OLLAMA_ENDPOINT="http://localhost:11434" \
     OLLAMA_MODEL="llama3.1:8b" \
-    OLLAMA_MAX_TOOLS_FOR_ROUTING="3"
+    OLLAMA_MAX_TOOLS_FOR_ROUTING="3" \
+    OLLAMA_EMBEDDINGS_MODEL="nomic-embed-text" \
+    OLLAMA_EMBEDDINGS_ENDPOINT="http://localhost:11434/api/embeddings"
 
 # OpenRouter Configuration (optional)
 # Access 100+ models through a single API
 ENV OPENROUTER_API_KEY="" \
     OPENROUTER_MODEL="amazon/nova-2-lite-v1:free" \
+    OPENROUTER_EMBEDDINGS_MODEL="openai/text-embedding-ada-002" \
     OPENROUTER_ENDPOINT="https://openrouter.ai/api/v1/chat/completions" \
     OPENROUTER_MAX_TOOLS_FOR_ROUTING="15"
 
@@ -84,12 +87,36 @@ ENV AZURE_OPENAI_ENDPOINT="" \
     AZURE_OPENAI_DEPLOYMENT="gpt-4o"
 
 # Hybrid Routing & Fallback Configuration
+# Options: databricks, azure-openai, azure-anthropic, openrouter, bedrock, openai
+# Note: Local providers (ollama, llamacpp, lmstudio) cannot be used as fallback
 ENV FALLBACK_ENABLED="true" \
     FALLBACK_PROVIDER="databricks"
 
 # Azure Anthropic Configuration (optional)
 ENV AZURE_ANTHROPIC_ENDPOINT="" \
     AZURE_ANTHROPIC_API_KEY=""
+
+# AWS Bedrock Configuration (optional)
+# Supports Claude, Titan, Llama, Jurassic, Cohere, Mistral models
+ENV AWS_BEDROCK_API_KEY="" \
+    AWS_BEDROCK_REGION="us-east-1" \
+    AWS_BEDROCK_MODEL_ID="anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+# llama.cpp Configuration (optional - for local GGUF models)
+ENV LLAMACPP_ENDPOINT="http://localhost:8080" \
+    LLAMACPP_MODEL="default" \
+    LLAMACPP_EMBEDDINGS_ENDPOINT="http://localhost:8080/embeddings" \
+    LLAMACPP_TIMEOUT_MS="120000"
+
+# OpenAI Configuration (optional)
+ENV OPENAI_API_KEY="" \
+    OPENAI_MODEL="gpt-4o" \
+    OPENAI_ENDPOINT="https://api.openai.com/v1/chat/completions"
+
+# Embeddings Provider Override (optional)
+# Options: ollama, llamacpp, openrouter, openai
+# By default, uses same provider as MODEL_PROVIDER
+ENV EMBEDDINGS_PROVIDER=""
 
 # Production Hardening Defaults
 ENV CIRCUIT_BREAKER_FAILURE_THRESHOLD="5" \

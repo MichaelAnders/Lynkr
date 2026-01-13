@@ -18,6 +18,7 @@ const express = require("express");
 const logger = require("../logger");
 const config = require("../config");
 const orchestrator = require("../orchestrator");
+const { getSession } = require("../sessions");
 const {
   convertOpenAIToAnthropic,
   convertAnthropicToOpenAI,
@@ -43,43 +44,113 @@ router.post("/chat/completions", async (req, res) => {
       messageCount: req.body.messages?.length,
       stream: req.body.stream || false,
       hasTools: !!req.body.tools,
-      toolCount: req.body.tools?.length || 0
+      toolCount: req.body.tools?.length || 0,
+      hasMessages: !!req.body.messages,
+      messagesType: typeof req.body.messages,
+      requestBodyKeys: Object.keys(req.body),
+      // Log first 500 chars of body for debugging
+      requestBodyPreview: JSON.stringify(req.body).substring(0, 500)
     }, "=== OPENAI CHAT COMPLETION REQUEST ===");
 
     // Convert OpenAI request to Anthropic format
     const anthropicRequest = convertOpenAIToAnthropic(req.body);
 
-    // Add session ID for tracking
-    anthropicRequest.sessionId = sessionId;
+    // Get or create session
+    const session = getSession(sessionId);
 
     // Handle streaming vs non-streaming
     if (req.body.stream) {
-      // Set up SSE headers
+      // Set up SSE headers for streaming
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      // Process request through orchestrator (streaming mode)
-      anthropicRequest.stream = true;
-
       try {
-        // Call orchestrator and get streaming response
-        const anthropicResponse = await orchestrator.orchestrateRequest(anthropicRequest, {
-          raw: res,
-          writeHead: res.writeHead.bind(res),
-          write: res.write.bind(res),
-          end: res.end.bind(res)
+        // For streaming, we need to handle it differently - convert to non-streaming temporarily
+        // Get non-streaming response from orchestrator
+        anthropicRequest.stream = false; // Force non-streaming from orchestrator
+
+        const result = await orchestrator.processMessage({
+          payload: anthropicRequest,
+          headers: req.headers,
+          session: session,
+          options: {
+            maxSteps: req.body?.max_steps
+          }
         });
 
-        // Orchestrator handles streaming directly to response
-        // If we reach here, streaming is complete
+        // Check if we have a valid response body
+        if (!result || !result.body) {
+          logger.error({
+            result: result ? JSON.stringify(result) : "null",
+            resultKeys: result ? Object.keys(result) : null
+          }, "Invalid orchestrator response for streaming");
+          throw new Error("Invalid response from orchestrator");
+        }
+
+        // Convert to OpenAI format
+        const openaiResponse = convertAnthropicToOpenAI(result.body, req.body.model);
+
+        // Simulate streaming by sending the complete response as chunks
+        const content = openaiResponse.choices[0].message.content || "";
+        const words = content.split(" ");
+
+        // Send start chunk
+        const startChunk = {
+          id: openaiResponse.id,
+          object: "chat.completion.chunk",
+          created: openaiResponse.created,
+          model: req.body.model,
+          choices: [{
+            index: 0,
+            delta: { role: "assistant", content: "" },
+            finish_reason: null
+          }]
+        };
+        res.write(`data: ${JSON.stringify(startChunk)}\n\n`);
+
+        // Send content in word chunks
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i] + (i < words.length - 1 ? " " : "");
+          const chunk = {
+            id: openaiResponse.id,
+            object: "chat.completion.chunk",
+            created: openaiResponse.created,
+            model: req.body.model,
+            choices: [{
+              index: 0,
+              delta: { content: word },
+              finish_reason: null
+            }]
+          };
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        }
+
+        // Send finish chunk
+        const finishChunk = {
+          id: openaiResponse.id,
+          object: "chat.completion.chunk",
+          created: openaiResponse.created,
+          model: req.body.model,
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: openaiResponse.choices[0].finish_reason
+          }]
+        };
+        res.write(`data: ${JSON.stringify(finishChunk)}\n\n`);
+        res.write("data: [DONE]\n\n");
+        res.end();
+
         logger.info({
           duration: Date.now() - startTime,
-          mode: "streaming"
+          mode: "streaming",
+          inputTokens: openaiResponse.usage.prompt_tokens,
+          outputTokens: openaiResponse.usage.completion_tokens
         }, "OpenAI streaming completed");
 
       } catch (streamError) {
-        logger.error({ error: streamError.message }, "Streaming error");
+        logger.error({ error: streamError.message, stack: streamError.stack }, "Streaming error");
 
         // Send error in OpenAI streaming format
         const errorChunk = {
@@ -87,16 +158,14 @@ router.post("/chat/completions", async (req, res) => {
           object: "chat.completion.chunk",
           created: Math.floor(Date.now() / 1000),
           model: req.body.model,
-          choices: [
-            {
-              index: 0,
-              delta: {
-                role: "assistant",
-                content: `Error: ${streamError.message}`
-              },
-              finish_reason: "stop"
-            }
-          ]
+          choices: [{
+            index: 0,
+            delta: {
+              role: "assistant",
+              content: `Error: ${streamError.message}`
+            },
+            finish_reason: "stop"
+          }]
         };
 
         res.write(`data: ${JSON.stringify(errorChunk)}\n\n`);
@@ -105,10 +174,25 @@ router.post("/chat/completions", async (req, res) => {
       }
     } else {
       // Non-streaming mode
-      const anthropicResponse = await orchestrator.orchestrateRequest(anthropicRequest);
+      const result = await orchestrator.processMessage({
+        payload: anthropicRequest,
+        headers: req.headers,
+        session: session,
+        options: {
+          maxSteps: req.body?.max_steps
+        }
+      });
+
+      // Debug logging
+      logger.debug({
+        resultKeys: Object.keys(result || {}),
+        hasBody: !!result?.body,
+        bodyType: typeof result?.body,
+        bodyKeys: result?.body ? Object.keys(result.body) : null
+      }, "Orchestrator result structure");
 
       // Convert Anthropic response to OpenAI format
-      const openaiResponse = convertAnthropicToOpenAI(anthropicResponse, req.body.model);
+      const openaiResponse = convertAnthropicToOpenAI(result.body, req.body.model);
 
       logger.info({
         duration: Date.now() - startTime,
@@ -237,16 +321,46 @@ router.get("/models", (req, res) => {
         break;
 
       case "azure-openai":
-        const azureDeployment = config.azureOpenAI?.deployment || "gpt-4o";
-        models.push({
-          id: azureDeployment,
-          object: "model",
-          created: 1704067200,
-          owned_by: "azure-openai",
-          permission: [],
-          root: azureDeployment,
-          parent: null
-        });
+        // Return standard OpenAI model names that Cursor recognizes
+        // The actual Azure deployment name doesn't matter - Lynkr routes based on config
+        models.push(
+          {
+            id: "gpt-4o",
+            object: "model",
+            created: 1704067200,
+            owned_by: "openai",
+            permission: [],
+            root: "gpt-4o",
+            parent: null
+          },
+          {
+            id: "gpt-4-turbo",
+            object: "model",
+            created: 1704067200,
+            owned_by: "openai",
+            permission: [],
+            root: "gpt-4-turbo",
+            parent: null
+          },
+          {
+            id: "gpt-4",
+            object: "model",
+            created: 1704067200,
+            owned_by: "openai",
+            permission: [],
+            root: "gpt-4",
+            parent: null
+          },
+          {
+            id: "gpt-3.5-turbo",
+            object: "model",
+            created: 1704067200,
+            owned_by: "openai",
+            permission: [],
+            root: "gpt-3.5-turbo",
+            parent: null
+          }
+        );
         break;
 
       case "ollama":
@@ -288,10 +402,43 @@ router.get("/models", (req, res) => {
         });
     }
 
+    // Add embedding models if embeddings are configured
+    const embeddingConfig = determineEmbeddingProvider();
+    if (embeddingConfig) {
+      let embeddingModelId;
+      switch (embeddingConfig.provider) {
+        case "llamacpp":
+          embeddingModelId = "text-embedding-3-small"; // Generic name for Cursor
+          break;
+        case "ollama":
+          embeddingModelId = embeddingConfig.model;
+          break;
+        case "openrouter":
+          embeddingModelId = embeddingConfig.model;
+          break;
+        case "openai":
+          embeddingModelId = embeddingConfig.model || "text-embedding-ada-002";
+          break;
+        default:
+          embeddingModelId = "text-embedding-3-small";
+      }
+
+      models.push({
+        id: embeddingModelId,
+        object: "model",
+        created: 1704067200,
+        owned_by: embeddingConfig.provider,
+        permission: [],
+        root: embeddingModelId,
+        parent: null
+      });
+    }
+
     logger.debug({
       provider,
       modelCount: models.length,
-      models: models.map(m => m.id)
+      models: models.map(m => m.id),
+      hasEmbeddings: !!embeddingConfig
     }, "Listed models for OpenAI API");
 
     res.json({
@@ -536,10 +683,27 @@ async function generateLlamaCppEmbeddings(inputs, embeddingConfig) {
 
     const data = await response.json();
 
-    // llama.cpp returns OpenAI-compatible format, but ensure consistency
+    // llama.cpp returns array format: [{index: 0, embedding: [[...]]}]
+    // Need to convert to OpenAI format: {data: [{object: "embedding", embedding: [...], index: 0}]}
+    let embeddingsData;
+
+    if (Array.isArray(data)) {
+      // llama.cpp returns array directly
+      embeddingsData = data.map(item => ({
+        object: "embedding",
+        embedding: Array.isArray(item.embedding[0]) ? item.embedding[0] : item.embedding, // Flatten double-nested array
+        index: item.index
+      }));
+    } else if (data.data) {
+      // Already in OpenAI format
+      embeddingsData = data.data;
+    } else {
+      embeddingsData = [];
+    }
+
     return {
       object: "list",
-      data: data.data || [],
+      data: embeddingsData,
       model: model || data.model || "default",
       usage: data.usage || {
         prompt_tokens: 0,

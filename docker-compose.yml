@@ -7,18 +7,22 @@ services:
     container_name: lynkr
     image: lynkr:2.0.0
     ports:
-      - "8080:8080"
+      - "8081:8081"
       - "8888:8888"
     environment:
       # ============================================================
       # PRIMARY MODEL PROVIDER
       # ============================================================
-      # Options: ollama, databricks, azure-openai, azure-anthropic, openrouter
+      # Options: ollama, databricks, azure-openai, azure-anthropic, openrouter, bedrock, llamacpp, lmstudio, openai
       # - ollama: Local models (free, private, offline)
       # - databricks: Claude Sonnet 4.5, Opus 4.5 (production)
       # - azure-openai: GPT-4o, GPT-5, o1, o3 (Azure integration)
       # - azure-anthropic: Claude models via Azure
       # - openrouter: 100+ models (flexible, cost-effective)
+      # - bedrock: AWS Bedrock (Claude, Titan, Llama, etc.)
+      # - llamacpp: Local GGUF models
+      # - lmstudio: LM Studio local models
+      # - openai: Direct OpenAI API
       MODEL_PROVIDER: ${MODEL_PROVIDER:-ollama}
 
       # ============================================================
@@ -41,6 +45,9 @@ services:
       OLLAMA_ENDPOINT: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       OLLAMA_MAX_TOOLS_FOR_ROUTING: ${OLLAMA_MAX_TOOLS_FOR_ROUTING:-3}
+      # Ollama Embeddings (for Cursor @Codebase search)
+      OLLAMA_EMBEDDINGS_MODEL: ${OLLAMA_EMBEDDINGS_MODEL:-nomic-embed-text}
+      OLLAMA_EMBEDDINGS_ENDPOINT: ${OLLAMA_EMBEDDINGS_ENDPOINT:-http://ollama:11434/api/embeddings}
 
       # ============================================================
       # OPENROUTER CONFIGURATION
@@ -49,6 +56,7 @@ services:
       # Popular models: openai/gpt-4o-mini, anthropic/claude-3.5-sonnet
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-amazon/nova-2-lite-v1:free}
+      OPENROUTER_EMBEDDINGS_MODEL: ${OPENROUTER_EMBEDDINGS_MODEL:-openai/text-embedding-ada-002}
       OPENROUTER_ENDPOINT: ${OPENROUTER_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
       OPENROUTER_MAX_TOOLS_FOR_ROUTING: ${OPENROUTER_MAX_TOOLS_FOR_ROUTING:-15}
 
@@ -70,7 +78,8 @@ services:
       # Enable/disable fallback to cloud providers
       FALLBACK_ENABLED: ${FALLBACK_ENABLED:-true}
       # Fallback provider when Ollama can't handle request
-      # Options: databricks, azure-openai, azure-anthropic, openrouter
+      # Options: databricks, azure-openai, azure-anthropic, openrouter, bedrock, openai
+      # Note: Local providers (ollama, llamacpp, lmstudio) cannot be used as fallback
       FALLBACK_PROVIDER: ${FALLBACK_PROVIDER:-databricks}
 
       # ============================================================
@@ -86,9 +95,41 @@ services:
       AZURE_ANTHROPIC_API_KEY: ${AZURE_ANTHROPIC_API_KEY:-}
 
       # ============================================================
+      # AWS BEDROCK CONFIGURATION (OPTIONAL)
+      # ============================================================
+      # Supports Claude, Titan, Llama, Jurassic, Cohere, Mistral models
+      # Get API key from AWS Console → Bedrock → API Keys
+      AWS_BEDROCK_API_KEY: ${AWS_BEDROCK_API_KEY:-}
+      AWS_BEDROCK_REGION: ${AWS_BEDROCK_REGION:-us-east-1}
+      AWS_BEDROCK_MODEL_ID: ${AWS_BEDROCK_MODEL_ID:-anthropic.claude-3-5-sonnet-20241022-v2:0}
+
+      # ============================================================
+      # LLAMA.CPP CONFIGURATION (OPTIONAL)
+      # ============================================================
+      # For local GGUF models
+      LLAMACPP_ENDPOINT: ${LLAMACPP_ENDPOINT:-http://localhost:8080}
+      LLAMACPP_MODEL: ${LLAMACPP_MODEL:-default}
+      LLAMACPP_EMBEDDINGS_ENDPOINT: ${LLAMACPP_EMBEDDINGS_ENDPOINT:-http://localhost:8080/embeddings}
+      LLAMACPP_TIMEOUT_MS: ${LLAMACPP_TIMEOUT_MS:-120000}
+
+      # ============================================================
+      # OPENAI CONFIGURATION (OPTIONAL)
+      # ============================================================
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-https://api.openai.com/v1/chat/completions}
+
+      # ============================================================
+      # EMBEDDINGS PROVIDER OVERRIDE (OPTIONAL)
+      # ============================================================
+      # Options: ollama, llamacpp, openrouter, openai
+      # By default, uses same provider as MODEL_PROVIDER
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-}
+
+      # ============================================================
       # SERVER CONFIGURATION
       # ============================================================
-      PORT: ${PORT:-8080}
+      PORT: ${PORT:-8081}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       WEB_SEARCH_ENDPOINT: ${WEB_SEARCH_ENDPOINT:-http://localhost:8888/search}
       WORKSPACE_ROOT: /workspace
@@ -110,7 +151,7 @@ services:
     networks:
       - lynkr-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health/live"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
