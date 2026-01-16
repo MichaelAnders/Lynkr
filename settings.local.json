@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(g++:*)",
+      "Bash(./prime_numbers)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
