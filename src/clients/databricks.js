@@ -206,6 +206,25 @@ async function invokeOllama(body) {
   const endpoint = `${config.ollama.endpoint}/api/chat`;
   const headers = { "Content-Type": "application/json" };
 
+  // Determine which model to use
+  const requestedModel = body?.model ?? null;
+  let modelToUse = config.ollama.model;  // Default from config
+
+  if (config.ollama.allowModelOverride && requestedModel && requestedModel.trim().length > 0) {
+    // Use requested model if override is enabled
+    modelToUse = requestedModel.trim();
+    logger.info({
+      configModel: config.ollama.model,
+      requestedModel: modelToUse,
+    }, "Using requested model for Ollama (override enabled)");
+  } else if (requestedModel && requestedModel !== config.ollama.model) {
+    logger.debug({
+      configModel: config.ollama.model,
+      requestedModel,
+      reason: "OLLAMA_ALLOW_MODEL_OVERRIDE=false or empty model"
+    }, "Ignoring requested model, using config default");
+  }
+
   // Convert Anthropic messages format to Ollama format
   // Ollama expects content as string, not content blocks array
   const convertedMessages = (body.messages || []).map(msg => {
@@ -251,9 +270,10 @@ async function invokeOllama(body) {
   }
 
   const ollamaBody = {
-    model: config.ollama.model,
+    model: modelToUse,
     messages: deduplicated,
     stream: false,  // Force non-streaming for Ollama - streaming format conversion not yet implemented
+    keep_alive: config.ollama.keepAlive,
     options: {
       temperature: body.temperature ?? 0.7,
       num_predict: body.max_tokens ?? 4096,

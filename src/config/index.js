@@ -80,6 +80,8 @@ const ollamaModel = process.env.OLLAMA_MODEL ?? "qwen2.5-coder:7b";
 const ollamaTimeout = Number.parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "120000", 10);
 const ollamaEmbeddingsEndpoint = process.env.OLLAMA_EMBEDDINGS_ENDPOINT ?? `${ollamaEndpoint}/api/embeddings`;
 const ollamaEmbeddingsModel = process.env.OLLAMA_EMBEDDINGS_MODEL ?? "nomic-embed-text";
+const ollamaKeepAlive = process.env.OLLAMA_KEEP_ALIVE ?? "5m";
+const ollamaAllowModelOverride = process.env.OLLAMA_ALLOW_MODEL_OVERRIDE !== "false"; // default true
 
 // OpenRouter configuration
 const openRouterApiKey = process.env.OPENROUTER_API_KEY ?? null;
@@ -437,6 +439,8 @@ const config = {
     endpoint: ollamaEndpoint,
     model: ollamaModel,
     timeout: Number.isNaN(ollamaTimeout) ? 120000 : ollamaTimeout,
+    keepAlive: ollamaKeepAlive,
+    allowModelOverride: ollamaAllowModelOverride,
     embeddingsEndpoint: ollamaEmbeddingsEndpoint,
     embeddingsModel: ollamaEmbeddingsModel,
   },
