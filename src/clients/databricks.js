@@ -12,6 +12,8 @@ const {
   convertAnthropicToBedrockFormat,
   convertBedrockResponseToAnthropic
 } = require("./bedrock-utils");
+const { validateOllamaModel } = require("./ollama-model-parser");
+const { createDnsLogger } = require("./dns-logger");
 
 
 
@@ -29,6 +31,7 @@ const httpAgent = new http.Agent({
   maxFreeSockets: 10,
   timeout: 60000,
   keepAliveMsecs: 30000,
+  lookup: createDnsLogger('HTTP')
 });
 
 const httpsAgent = new https.Agent({
@@ -37,6 +40,7 @@ const httpsAgent = new https.Agent({
   maxFreeSockets: 10,
   timeout: 60000,
   keepAliveMsecs: 30000,
+  lookup: createDnsLogger('HTTPS')
 });
 
 async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
@@ -56,6 +60,8 @@ async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
       provider: providerLabel,
       status: response.status,
       streaming: true,
+      destinationUrl: url,
+      destinationHostname: new URL(url).hostname,
     }, `${providerLabel} API streaming response`);
 
     if (!response.ok) {
@@ -64,6 +70,8 @@ async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
         provider: providerLabel,
         status: response.status,
         error: errorText.substring(0, 200),
+        destinationUrl: url,
+        destinationHostname: new URL(url).hostname,
       }, `${providerLabel} API streaming error`);
     }
 
@@ -90,6 +98,8 @@ async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
       provider: providerLabel,
       status: response.status,
       responseLength: text.length,
+      destinationUrl: url,
+      destinationHostname: new URL(url).hostname,
     }, `${providerLabel} API response`);
 
     let json;
@@ -114,6 +124,8 @@ async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
         provider: providerLabel,
         status: response.status,
         error: json?.error || text.substring(0, 200),
+        destinationUrl: url,
+        destinationHostname: new URL(url).hostname,
       }, `${providerLabel} API error`);
     }
 
@@ -196,7 +208,7 @@ async function invokeAzureAnthropic(body) {
   );
 }
 
-async function invokeOllama(body) {
+async function invokeOllama(body, modelOverride = null) {
   if (!config.ollama?.endpoint) {
     throw new Error("Ollama endpoint is not configured.");
   }
@@ -205,6 +217,12 @@ async function invokeOllama(body) {
 
   const endpoint = `${config.ollama.endpoint}/api/chat`;
   const headers = { "Content-Type": "application/json" };
+
+  // Use model override if provided, otherwise use config
+  const modelToUse = modelOverride || config.ollama.model;
+  if (modelOverride) {
+    logger.info(`Using Ollama model override: ${modelOverride}`);
+  }
 
   // Convert Anthropic messages format to Ollama format
   // Ollama expects content as string, not content blocks array
@@ -251,7 +269,7 @@ async function invokeOllama(body) {
   }
 
   const ollamaBody = {
-    model: config.ollama.model,
+    model: modelToUse,
     messages: deduplicated,
     stream: false,  // Force non-streaming for Ollama - streaming format conversion not yet implemented
     options: {
@@ -926,6 +944,28 @@ async function invokeModel(body, options = {}) {
     toolCount: Array.isArray(body?.tools) ? body.tools.length : 0,
   }, "Provider routing decision");
 
+  // Validate Ollama model override if routing selected Ollama
+  if (initialProvider === "ollama" && options.ollamaModelOverride) {
+    logger.debug(`Validating Ollama model override: ${options.ollamaModelOverride}`);
+    const validation = await validateOllamaModel(options.ollamaModelOverride);
+
+    if (!validation.available) {
+      logger.error(`Ollama model validation failed: ${validation.error}`);
+      return {
+        ok: false,
+        status: 400,
+        json: {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: validation.error
+          }
+        }
+      };
+    }
+    logger.info(`Ollama model override validated successfully: ${options.ollamaModelOverride}`);
+  }
+
   metricsCollector.recordProviderRouting(initialProvider);
 
   // Get circuit breaker for initial provider
@@ -946,7 +986,7 @@ async function invokeModel(body, options = {}) {
       } else if (initialProvider === "azure-anthropic") {
         return await invokeAzureAnthropic(body);
       } else if (initialProvider === "ollama") {
-        return await invokeOllama(body);
+        return await invokeOllama(body, options.ollamaModelOverride);
       } else if (initialProvider === "openrouter") {
         return await invokeOpenRouter(body);
       } else if (initialProvider === "openai") {

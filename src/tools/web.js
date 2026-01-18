@@ -122,6 +122,14 @@ async function performSearch({ query, limit, timeoutMs }) {
         throw error;
       }
 
+      logger.debug({
+        tool: "web_search",
+        status: response.status,
+        destinationUrl: url,
+        destinationHostname: new URL(url).hostname,
+        responseLength: text.length,
+      }, "Web search request completed");
+
       return json ?? { results: [], raw: text };
     } catch (error) {
       if (error.name === "AbortError") {
@@ -227,6 +235,15 @@ async function fetchDocument(url, timeoutMs) {
                      response.status >= 500 ? "SERVER_ERROR" : "REQUEST_ERROR";
         throw error;
       }
+
+      logger.debug({
+        tool: "web_fetch",
+        status: response.status,
+        destinationUrl: url.toString(),
+        destinationHostname: url.hostname,
+        responseLength: text.length,
+        contentType: response.headers.get("content-type") || "",
+      }, "Web fetch request completed");
 
       return {
         status: response.status,

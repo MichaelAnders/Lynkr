@@ -419,6 +419,13 @@ const agentsDefaultModel = process.env.AGENTS_DEFAULT_MODEL ?? "haiku";
 const agentsMaxSteps = Number.parseInt(process.env.AGENTS_MAX_STEPS ?? "15", 10);
 const agentsTimeout = Number.parseInt(process.env.AGENTS_TIMEOUT ?? "120000", 10);
 
+// LLM Audit logging configuration
+const auditEnabled = process.env.LLM_AUDIT_ENABLED !== "false"; // default true
+const auditLogFile = process.env.LLM_AUDIT_LOG_FILE ?? path.join(process.cwd(), "logs", "llm-audit.log");
+const auditMaxContentLength = Number.parseInt(process.env.LLM_AUDIT_MAX_CONTENT_LENGTH ?? "5000", 10);
+const auditMaxFiles = Number.parseInt(process.env.LLM_AUDIT_MAX_FILES ?? "30", 10);
+const auditMaxSize = process.env.LLM_AUDIT_MAX_SIZE ?? "100M";
+
 const config = {
   env: process.env.NODE_ENV ?? "development",
   port: Number.isNaN(port) ? 8080 : port,
@@ -641,6 +648,15 @@ const config = {
     mode: smartToolSelectionMode,
     tokenBudget: smartToolSelectionTokenBudget,
     minimalMode: false,  // HARDCODED - disabled
+  },
+  audit: {
+    enabled: auditEnabled,
+    logFile: auditLogFile,
+    maxContentLength: Number.isNaN(auditMaxContentLength) ? 5000 : auditMaxContentLength,
+    rotation: {
+      maxFiles: Number.isNaN(auditMaxFiles) ? 30 : auditMaxFiles,
+      maxSize: auditMaxSize,
+    },
   },
 };
 

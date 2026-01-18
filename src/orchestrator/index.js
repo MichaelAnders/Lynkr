@@ -11,6 +11,9 @@ const systemPrompt = require("../prompts/system");
 const historyCompression = require("../context/compression");
 const tokenBudget = require("../context/budget");
 const { classifyRequestType, selectToolsSmartly } = require("../tools/smart-selection");
+const { parseOllamaModel } = require("../clients/ollama-model-parser");
+const { createAuditLogger } = require("../logger/audit-logger");
+const { getResolvedIp, runWithDnsContext } = require("../clients/dns-logger");
 
 const DROP_KEYS = new Set([
   "provider",
@@ -105,6 +108,44 @@ const DEFAULT_AZURE_TOOLS = Object.freeze([
 ]);
 
 const PLACEHOLDER_WEB_RESULT_REGEX = /^Web search results for query:/i;
+
+// Initialize audit logger for LLM request/response tracking
+const auditLogger = createAuditLogger(config.audit);
+
+/**
+ * Get destination URL for LLM provider
+ * @param {string} providerType - Provider type (databricks, ollama, openai, etc.)
+ * @param {Object} options - Optional parameters like ollamaModelOverride
+ * @returns {string} Destination URL
+ */
+function getProviderDestinationUrl(providerType, options = {}) {
+  switch (providerType) {
+    case "databricks":
+      return config.databricks?.url || "unknown";
+    case "azure-anthropic":
+      return config.azureAnthropic?.endpoint
+        ? `${config.azureAnthropic.endpoint}/v1/chat/completions`
+        : "unknown";
+    case "ollama":
+      return `${config.ollama?.endpoint || "http://localhost:11434"}/api/chat`;
+    case "openrouter":
+      return config.openrouter?.endpoint || "https://openrouter.ai/api/v1/chat/completions";
+    case "azure-openai":
+      return config.azureOpenAI?.endpoint
+        ? `${config.azureOpenAI.endpoint}/openai/deployments/${config.azureOpenAI.deployment}/chat/completions?api-version=${config.azureOpenAI.apiVersion}`
+        : "unknown";
+    case "openai":
+      return config.openai?.endpoint || "https://api.openai.com/v1/chat/completions";
+    case "llamacpp":
+      return `${config.llamacpp?.endpoint || "http://localhost:8080"}/v1/chat/completions`;
+    case "lmstudio":
+      return `${config.lmstudio?.endpoint || "http://localhost:1234"}/v1/chat/completions`;
+    case "bedrock":
+      return `https://bedrock-runtime.${config.bedrock?.region || "us-east-1"}.amazonaws.com/model/${config.bedrock?.modelId || "anthropic.claude-3-5-sonnet-20241022-v2:0"}/invoke`;
+    default:
+      return "unknown";
+  }
+}
 
 function flattenBlocks(blocks) {
   if (!Array.isArray(blocks)) return String(blocks ?? "");
@@ -1146,6 +1187,7 @@ async function runAgentLoop({
   options,
   cacheKey,
   providerType,
+  ollamaModelOverride,
 }) {
   const settings = resolveLoopOptions(options);
   const start = Date.now();
@@ -1358,7 +1400,25 @@ async function runAgentLoop({
     }, 'Estimated token usage before model call');
   }
 
-  const databricksResponse = await invokeModel(cleanPayload);
+  // Audit log: LLM request (wrap in DNS context for IP tracking)
+  const requestStartTime = Date.now();
+  if (auditLogger.enabled) {
+    const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
+    auditLogger.logLlmRequest({
+      correlationId: options?.correlationId,
+      sessionId: session?.id,
+      provider: providerType,
+      model: cleanPayload.model,
+      stream: cleanPayload.stream || false,
+      destinationUrl,
+      userMessages: cleanPayload.messages,
+      systemPrompt: cleanPayload.system,
+      tools: cleanPayload.tools?.map(t => t.name),
+      maxTokens: cleanPayload.max_tokens,
+    });
+  }
+
+  const databricksResponse = await invokeModel(cleanPayload, { ollamaModelOverride });
 
   // Extract and log actual token usage
   const actualUsage = databricksResponse.ok && config.tokenTracking?.enabled !== false
@@ -1383,6 +1443,29 @@ async function runAgentLoop({
         },
         "Streaming response received, passing through"
       );
+
+      // Audit log: Streaming response (no content captured)
+      if (auditLogger.enabled) {
+        const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
+        const hostname = new URL(destinationUrl).hostname;
+        const resolvedIp = getResolvedIp(hostname);
+
+        auditLogger.logLlmResponse({
+          correlationId: options?.correlationId,
+          sessionId: session?.id,
+          provider: providerType,
+          model: cleanPayload.model,
+          stream: true,
+          destinationUrl,
+          destinationHostname: hostname,
+          destinationIp: resolvedIp?.ip,
+          destinationIpFamily: resolvedIp?.family,
+          status: databricksResponse.status,
+          latencyMs: Date.now() - requestStartTime,
+          streamingNote: "Response content streamed to client - not captured in logs",
+        });
+      }
+
       return {
         response: buildStreamingResponse(databricksResponse),
         steps,
@@ -1408,6 +1491,29 @@ async function runAgentLoop({
         },
         "Agent loop terminated without JSON",
       );
+
+      // Audit log: Non-JSON response error
+      if (auditLogger.enabled) {
+        const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
+        const hostname = new URL(destinationUrl).hostname;
+        const resolvedIp = getResolvedIp(hostname);
+
+        auditLogger.logLlmResponse({
+          correlationId: options?.correlationId,
+          sessionId: session?.id,
+          provider: providerType,
+          model: cleanPayload.model,
+          stream: false,
+          destinationUrl,
+          destinationHostname: hostname,
+          destinationIp: resolvedIp?.ip,
+          destinationIpFamily: resolvedIp?.family,
+          status: databricksResponse.status,
+          latencyMs: Date.now() - requestStartTime,
+          error: "Non-JSON response received",
+        });
+      }
+
       return {
         response,
         steps,
@@ -1433,6 +1539,29 @@ async function runAgentLoop({
         },
         "Agent loop encountered API error",
       );
+
+      // Audit log: API error
+      if (auditLogger.enabled) {
+        const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
+        const hostname = new URL(destinationUrl).hostname;
+        const resolvedIp = getResolvedIp(hostname);
+
+        auditLogger.logLlmResponse({
+          correlationId: options?.correlationId,
+          sessionId: session?.id,
+          provider: providerType,
+          model: cleanPayload.model,
+          stream: false,
+          destinationUrl,
+          destinationHostname: hostname,
+          destinationIp: resolvedIp?.ip,
+          destinationIpFamily: resolvedIp?.family,
+          status: databricksResponse.status,
+          latencyMs: Date.now() - requestStartTime,
+          error: databricksResponse.json?.error?.message || "API error",
+        });
+      }
+
       return {
         response,
         steps,
@@ -1481,6 +1610,81 @@ async function runAgentLoop({
       const choice = databricksResponse.json?.choices?.[0];
       message = choice?.message ?? {};
       toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    }
+
+    // Extract assistant response text for logging (handles all provider formats)
+    let assistantResponseText;
+    if (providerType === "azure-anthropic") {
+      // Azure Anthropic: content is array of blocks
+      assistantResponseText = flattenBlocks(databricksResponse.json?.content || []);
+    } else if (providerType === "ollama") {
+      // Ollama: message.content directly (no choices array)
+      assistantResponseText = databricksResponse.json?.message?.content || "";
+    } else {
+      // OpenAI/OpenRouter: choices[0].message.content
+      assistantResponseText = databricksResponse.json?.choices?.[0]?.message?.content || "";
+    }
+
+    // Audit log: Successful response
+    if (auditLogger.enabled) {
+      const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
+      const hostname = new URL(destinationUrl).hostname;
+      const resolvedIp = getResolvedIp(hostname);
+
+      auditLogger.logLlmResponse({
+        correlationId: options?.correlationId,
+        sessionId: session?.id,
+        provider: providerType,
+        model: cleanPayload.model,
+        stream: false,
+        destinationUrl,
+        destinationHostname: hostname,
+        destinationIp: resolvedIp?.ip,
+        destinationIpFamily: resolvedIp?.family,
+        assistantMessage: providerType === "azure-anthropic"
+          ? databricksResponse.json?.content
+          : message,
+        stopReason: providerType === "azure-anthropic"
+          ? databricksResponse.json?.stop_reason
+          : message.finish_reason,
+        requestTokens: databricksResponse.json?.usage?.input_tokens || databricksResponse.json?.usage?.prompt_tokens,
+        responseTokens: databricksResponse.json?.usage?.output_tokens || databricksResponse.json?.usage?.completion_tokens,
+        latencyMs: Date.now() - requestStartTime,
+        status: databricksResponse.status,
+      });
+
+      // Extract last user message for query-response pair logging
+      const lastUserMessage = cleanPayload.messages
+        ?.slice()
+        .reverse()
+        .find(msg => msg.role === "user");
+
+      // Log query-response pair with FULL content (no truncation)
+      if (lastUserMessage) {
+        // Extract user query safely (handle string or array content)
+        const userQueryText = typeof lastUserMessage.content === 'string'
+          ? lastUserMessage.content
+          : flattenBlocks(lastUserMessage.content);
+
+        // assistantResponseText already extracted above (handles all provider formats)
+
+        auditLogger.logQueryResponsePair({
+          correlationId: options?.correlationId,
+          sessionId: session?.id,
+          provider: providerType,
+          model: cleanPayload.model,
+          requestTime: new Date(requestStartTime).toISOString(),
+          responseTime: new Date().toISOString(),
+          userQuery: userQueryText,
+          assistantResponse: assistantResponseText,
+          stopReason: providerType === "azure-anthropic"
+            ? databricksResponse.json?.stop_reason
+            : message.finish_reason,
+          latencyMs: Date.now() - requestStartTime,
+          requestTokens: databricksResponse.json?.usage?.input_tokens || databricksResponse.json?.usage?.prompt_tokens,
+          responseTokens: databricksResponse.json?.usage?.output_tokens || databricksResponse.json?.usage?.completion_tokens,
+        });
+      }
     }
 
     if (toolCalls.length > 0) {
@@ -2591,6 +2795,28 @@ async function processMessage({ payload, headers, session, options = {} }) {
     typeof headers?.["anthropic-beta"] === "string" &&
     headers["anthropic-beta"].includes("interleaved-thinking");
 
+  // Parse model parameter to extract Ollama model override
+  let ollamaModelOverride = null;
+  try {
+    ollamaModelOverride = parseOllamaModel(payload?.model);
+    if (ollamaModelOverride) {
+      logger.info(`Parsed Ollama model override: ${ollamaModelOverride}`);
+    }
+  } catch (error) {
+    // If parsing fails (e.g., empty model name), return error immediately
+    logger.error(`Error parsing Ollama model: ${error.message}`);
+    return {
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: error.message
+        }
+      }
+    };
+  }
+
   const cleanPayload = sanitizePayload(payload);
   appendTurnToSession(session, {
     role: "user",
@@ -2662,6 +2888,7 @@ async function processMessage({ payload, headers, session, options = {} }) {
     options,
     cacheKey,
     providerType: config.modelProvider?.type ?? "databricks",
+    ollamaModelOverride,
   });
 
   return loopResult.response;

@@ -27,6 +27,7 @@ const { registerTaskTools } = require("./tools/tasks");
 const { registerTestTools } = require("./tools/tests");
 const { registerMcpTools } = require("./tools/mcp");
 const { registerAgentTaskTool } = require("./tools/agent-task");
+const { validateOllamaModel } = require("./clients/ollama-model-parser");
 
 initialiseMcp();
 registerStubTools();
@@ -120,7 +121,24 @@ function createApp() {
   return app;
 }
 
-function start() {
+async function start() {
+  // Validate Ollama model on startup (non-blocking, just warns)
+  if (config.ollama?.model && config.modelProvider?.preferOllama) {
+    validateOllamaModel(config.ollama.model)
+      .then((validation) => {
+        if (!validation.available) {
+          logger.warn(
+            `Ollama model '${config.ollama.model}' configured via OLLAMA_MODEL is not available: ${validation.error}`
+          );
+        } else {
+          logger.info(`Ollama model '${config.ollama.model}' validated successfully on startup`);
+        }
+      })
+      .catch((error) => {
+        logger.warn(`Could not validate Ollama model on startup: ${error.message}`);
+      });
+  }
+
   const app = createApp();
   const server = app.listen(config.port, () => {
     console.log(`Claude→Databricks proxy listening on http://localhost:${config.port}`);

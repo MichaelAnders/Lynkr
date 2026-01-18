@@ -4,6 +4,11 @@ const logger = require("../logger");
 /**
  * Create an optimized HTTP agent for web search and fetch operations
  * with connection pooling and keep-alive enabled
+ *
+ * Note: DNS resolution logging is not implemented for Undici agents as they
+ * use a different connection API than Node.js http/https agents. Undici does
+ * not expose a simple 'lookup' callback. DNS information is logged at the
+ * application level in web.js instead.
  */
 function createWebAgent() {
   const agent = new Agent({

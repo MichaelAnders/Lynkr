@@ -3,9 +3,21 @@
     "allow": [
       "Bash(g++:*)",
       "Bash(./prime_numbers)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)",
-      "WebSearch"
+      "Bash(grep:*)",
+      "Bash(node -e:*)",
+      "Bash(node --version)",
+      "Bash(node --check:*)",
+      "Bash(npm run test:quick:*)",
+      "Bash(LOG_LEVEL=debug node:*)",
+      "Bash(git add:*)",
+      "Bash(chmod:*)",
+      "Bash(node test-audit-logging.js:*)",
+      "Bash(node scripts/parse-audit-logs.js:*)",
+      "Bash(if [ -f logs/llm-audit.log ])",
+      "Bash(then node scripts/view-query-responses.js --limit=1)",
+      "Bash(else echo \"No audit log found yet\")",
+      "Bash(fi)",
+      "Bash(bd sync:*)"
     ],
     "deny": [],
     "ask": []

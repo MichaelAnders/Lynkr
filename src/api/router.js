@@ -105,6 +105,12 @@ router.post("/api/event_logging/batch", (req, res) => {
 router.post("/v1/messages", rateLimiter, async (req, res, next) => {
   try {
     metrics.recordRequest();
+
+    // Generate or extract correlation ID for request tracing and audit logging
+    const correlationId = req.headers['x-request-id']
+      || req.headers['x-correlation-id']
+      || `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
     // Support both query parameter (?stream=true) and body parameter ({"stream": true})
     const wantsStream = Boolean(req.query?.stream === 'true' || req.body?.stream);
     const hasTools = Array.isArray(req.body?.tools) && req.body.tools.length > 0;
@@ -130,6 +136,7 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
         options: {
           maxSteps: req.body?.max_steps,
           maxDurationMs: req.body?.max_duration_ms,
+          correlationId,
         },
       });
 
@@ -305,6 +312,7 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
       options: {
         maxSteps: req.body?.max_steps,
         maxDurationMs: req.body?.max_duration_ms,
+        correlationId,
       },
     });
 
