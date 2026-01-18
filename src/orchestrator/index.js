@@ -1402,13 +1402,61 @@ async function runAgentLoop({
 
   // Audit log: LLM request (wrap in DNS context for IP tracking)
   const requestStartTime = Date.now();
+
+  // Determine actual model for logging (handles all provider-specific overrides)
+  let actualModelName = cleanPayload.model;
+
+  switch (providerType) {
+    case "ollama":
+      // Use ollamaModelOverride if present, otherwise fall back to config
+      actualModelName = ollamaModelOverride || config.ollama?.model || cleanPayload.model;
+      break;
+
+    case "openrouter":
+      // OpenRouter always uses config model, ignoring request
+      actualModelName = config.openrouter?.model || cleanPayload.model;
+      break;
+
+    case "azure-openai":
+      // Azure OpenAI uses deployment name, not model field
+      actualModelName = config.azureOpenAI?.deployment || cleanPayload.model;
+      break;
+
+    case "openai":
+      // OpenAI uses config model, ignoring request
+      actualModelName = config.openai?.model || cleanPayload.model;
+      break;
+
+    case "bedrock":
+      // Bedrock uses modelId from config
+      actualModelName = config.bedrock?.modelId || cleanPayload.model;
+      break;
+
+    case "llamacpp":
+      // LlamaCpp doesn't send model field in request
+      actualModelName = config.llamacpp?.model || "llamacpp-default";
+      break;
+
+    case "lmstudio":
+      // LMStudio doesn't send model field in request
+      actualModelName = config.lmstudio?.model || "lmstudio-default";
+      break;
+
+    case "azure-anthropic":
+    case "databricks":
+    default:
+      // These providers pass through body.model as-is
+      actualModelName = cleanPayload.model;
+      break;
+  }
+
   if (auditLogger.enabled) {
     const destinationUrl = getProviderDestinationUrl(providerType, { ollamaModelOverride });
     auditLogger.logLlmRequest({
       correlationId: options?.correlationId,
       sessionId: session?.id,
       provider: providerType,
-      model: cleanPayload.model,
+      model: actualModelName,
       stream: cleanPayload.stream || false,
       destinationUrl,
       userMessages: cleanPayload.messages,
@@ -1454,7 +1502,7 @@ async function runAgentLoop({
           correlationId: options?.correlationId,
           sessionId: session?.id,
           provider: providerType,
-          model: cleanPayload.model,
+          model: actualModelName,
           stream: true,
           destinationUrl,
           destinationHostname: hostname,
@@ -1502,7 +1550,7 @@ async function runAgentLoop({
           correlationId: options?.correlationId,
           sessionId: session?.id,
           provider: providerType,
-          model: cleanPayload.model,
+          model: actualModelName,
           stream: false,
           destinationUrl,
           destinationHostname: hostname,
@@ -1550,7 +1598,7 @@ async function runAgentLoop({
           correlationId: options?.correlationId,
           sessionId: session?.id,
           provider: providerType,
-          model: cleanPayload.model,
+          model: actualModelName,
           stream: false,
           destinationUrl,
           destinationHostname: hostname,
@@ -1635,7 +1683,7 @@ async function runAgentLoop({
         correlationId: options?.correlationId,
         sessionId: session?.id,
         provider: providerType,
-        model: cleanPayload.model,
+        model: actualModelName,
         stream: false,
         destinationUrl,
         destinationHostname: hostname,
@@ -1672,7 +1720,7 @@ async function runAgentLoop({
           correlationId: options?.correlationId,
           sessionId: session?.id,
           provider: providerType,
-          model: cleanPayload.model,
+          model: actualModelName,
           requestTime: new Date(requestStartTime).toISOString(),
           responseTime: new Date().toISOString(),
           userQuery: userQueryText,
