@@ -14,6 +14,41 @@ const { classifyRequestType, selectToolsSmartly } = require("../tools/smart-sele
 const { createAuditLogger } = require("../logger/audit-logger");
 const { getResolvedIp, runWithDnsContext } = require("../clients/dns-logger");
 const { getShuttingDown } = require("../api/health");
+const crypto = require("crypto");
+
+/**
+ * Get destination URL for audit logging based on provider type
+ * @param {string} providerType - Provider type (databricks, azure-anthropic, etc)
+ * @returns {string} - Destination URL
+ */
+function getDestinationUrl(providerType) {
+  switch (providerType) {
+    case 'databricks':
+      return config.databricks?.url ?? 'unknown';
+    case 'azure-anthropic':
+      return config.azureAnthropic?.endpoint ?? 'unknown';
+    case 'ollama':
+      return config.ollama?.endpoint ?? 'unknown';
+    case 'azure-openai':
+      return config.azureOpenAI?.endpoint ?? 'unknown';
+    case 'openrouter':
+      return config.openrouter?.endpoint ?? 'unknown';
+    case 'openai':
+      return 'https://api.openai.com/v1/chat/completions';
+    case 'llamacpp':
+      return config.llamacpp?.endpoint ?? 'unknown';
+    case 'lmstudio':
+      return config.lmstudio?.endpoint ?? 'unknown';
+    case 'bedrock':
+      return config.bedrock?.endpoint ?? 'unknown';
+    case 'zai':
+      return config.zai?.endpoint ?? 'unknown';
+    case 'vertex':
+      return config.vertex?.endpoint ?? 'unknown';
+    default:
+      return 'unknown';
+  }
+}
 
 const DROP_KEYS = new Set([
   "provider",
@@ -1198,6 +1233,8 @@ async function runAgentLoop({
   providerType,
 }) {
   const settings = resolveLoopOptions(options);
+  // Initialize audit logger (no-op if disabled)
+  const auditLogger = createAuditLogger(config.audit);
   const start = Date.now();
   let steps = 0;
   let toolCallsExecuted = 0;
@@ -1439,6 +1476,25 @@ async function runAgentLoop({
     }, 'Estimated token usage before model call');
   }
 
+  // Generate correlation ID for request/response pairing
+  const correlationId = `req_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
+
+  // Log LLM request before invocation
+  if (auditLogger.enabled) {
+    auditLogger.logLlmRequest({
+      correlationId,
+      sessionId: session?.id ?? null,
+      provider: providerType,
+      model: cleanPayload.model,
+      stream: cleanPayload.stream ?? false,
+      destinationUrl: getDestinationUrl(providerType),
+      userMessages: cleanPayload.messages,
+      systemPrompt: cleanPayload.system,
+      tools: cleanPayload.tools,
+      maxTokens: cleanPayload.max_tokens,
+    });
+  }
+
   const databricksResponse = await invokeModel(cleanPayload);
 
   // Extract and log actual token usage
@@ -1452,6 +1508,58 @@ async function runAgentLoop({
     // Record in session metadata
     if (session) {
       tokens.recordTokenUsage(session, steps, estimatedTokens, actualUsage, cleanPayload.model);
+    }
+  }
+
+  // Log LLM response after invocation
+  if (auditLogger.enabled) {
+    const latencyMs = Date.now() - start;
+
+    if (databricksResponse.stream) {
+      // Log streaming response (no content, just metadata)
+      auditLogger.logLlmResponse({
+        correlationId,
+        sessionId: session?.id ?? null,
+        provider: providerType,
+        model: cleanPayload.model,
+        stream: true,
+        destinationUrl: getDestinationUrl(providerType),
+        status: databricksResponse.status,
+        latencyMs,
+        streamingNote: 'Content streamed directly to client, not captured in audit log',
+      });
+    } else if (databricksResponse.ok && databricksResponse.json) {
+      // Log successful non-streaming response
+      const message = databricksResponse.json;
+      const assistantMessage = message.content ?? message.choices?.[0]?.message;
+
+      auditLogger.logLlmResponse({
+        correlationId,
+        sessionId: session?.id ?? null,
+        provider: providerType,
+        model: cleanPayload.model,
+        stream: false,
+        destinationUrl: getDestinationUrl(providerType),
+        assistantMessage,
+        stopReason: message.stop_reason ?? message.choices?.[0]?.finish_reason ?? null,
+        requestTokens: actualUsage?.input_tokens ?? actualUsage?.prompt_tokens ?? null,
+        responseTokens: actualUsage?.output_tokens ?? actualUsage?.completion_tokens ?? null,
+        latencyMs,
+        status: databricksResponse.status,
+      });
+    } else {
+      // Log error response
+      auditLogger.logLlmResponse({
+        correlationId,
+        sessionId: session?.id ?? null,
+        provider: providerType,
+        model: cleanPayload.model,
+        stream: false,
+        destinationUrl: getDestinationUrl(providerType),
+        status: databricksResponse.status,
+        latencyMs,
+        error: databricksResponse.text ?? databricksResponse.json ?? 'Unknown error',
+      });
     }
   }
 
