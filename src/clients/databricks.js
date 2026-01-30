@@ -308,42 +308,52 @@ async function invokeOllama(body) {
     },
   };
 
+  // Check if model supports tools FIRST (before wasteful injection)
+  const supportsTools = await checkOllamaToolSupport(config.ollama.model);
+
   // Inject standard tools if client didn't send any (passthrough mode)
   let toolsToSend = body.tools;
   let toolsInjected = false;
 
   const injectToolsOllama = process.env.INJECT_TOOLS_OLLAMA !== "false";
-  if (injectToolsOllama && (!Array.isArray(toolsToSend) || toolsToSend.length === 0)) {
-    toolsToSend = STANDARD_TOOLS;
-    toolsInjected = true;
-    logger.info({
-      injectedToolCount: STANDARD_TOOLS.length,
-      injectedToolNames: STANDARD_TOOLS.map(t => t.name),
-      reason: "Client did not send tools (passthrough mode)"
-    }, "=== INJECTING STANDARD TOOLS (Ollama) ===");
-  } else if (!injectToolsOllama) {
-    logger.info({}, "Tool injection disabled for Ollama (INJECT_TOOLS_OLLAMA=false)");
-  }
-
-  // Check if model supports tools
-  const supportsTools = await checkOllamaToolSupport(config.ollama.model);
 
   if (!supportsTools) {
-    logger.warn({
-      model: config.ollama.model,
-      toolCount: toolsToSend?.length || 0
-    }, "Model does not support tool calling - stripping tools from request");
+    // Model doesn't support tools - don't inject them
+    toolsToSend = null;
+  } else if (injectToolsOllama && (!Array.isArray(toolsToSend) || toolsToSend.length === 0)) {
+    // Model supports tools and none provided - inject them
+    toolsToSend = STANDARD_TOOLS;
+    toolsInjected = true;
   }
 
   // Add tools if present AND model supports them
   if (supportsTools && Array.isArray(toolsToSend) && toolsToSend.length > 0) {
     ollamaBody.tools = convertAnthropicToolsToOllama(toolsToSend);
-    logger.info({
-      toolCount: toolsToSend.length,
-      toolNames: toolsToSend.map(t => t.name),
-      toolsInjected
-    }, "Sending tools to Ollama");
   }
+
+  // Single consolidated log message for all cases (easy to grep and compare across models)
+  const toolCount = (supportsTools && Array.isArray(toolsToSend)) ? toolsToSend.length : 0;
+  let logMessage;
+
+  if (!supportsTools) {
+    logMessage = `Tools not supported (0 tools)`;
+  } else if (toolsInjected) {
+    logMessage = `injected ${toolCount} tools`;
+  } else if (Array.isArray(toolsToSend) && toolsToSend.length > 0) {
+    logMessage = `Using client-provided tools (${toolCount} tools)`;
+  } else if (!injectToolsOllama) {
+    logMessage = `Tool injection disabled (0 tools)`;
+  } else {
+    logMessage = `No tools (0 tools)`;
+  }
+
+  logger.info({
+    model: config.ollama.model,
+    toolCount,
+    toolsInjected,
+    supportsTools,
+    toolNames: (Array.isArray(toolsToSend) && toolsToSend.length > 0) ? toolsToSend.map(t => t.name) : []
+  }, `=== Ollama STANDARD TOOLS INJECTION for ${config.ollama.model} === ${logMessage}`);
 
   return performJsonRequest(endpoint, { headers, body: ollamaBody }, "Ollama");
 }
