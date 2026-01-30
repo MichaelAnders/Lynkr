@@ -878,28 +878,8 @@ function sanitizePayload(payload) {
       });
     }
 
-    // Flatten system messages into the first user message
-    const systemChunks = [];
-    clean.messages = clean.messages.filter((msg) => {
-      if (msg?.role === "system") {
-        if (typeof msg.content === "string" && msg.content.trim().length > 0) {
-          systemChunks.push(msg.content.trim());
-        }
-        return false;
-      }
-      return true;
-    });
-
-    // Prepend system content to first user message if present
-    if (systemChunks.length > 0 && clean.messages.length > 0) {
-      const systemContent = systemChunks.join("\n\n");
-      const firstMsg = clean.messages[0];
-      if (firstMsg.role === "user") {
-        firstMsg.content = `${systemContent}\n\n${firstMsg.content}`;
-      }
-    }
-
-    delete clean.system;
+    // Keep system prompt separate for Ollama (same as other providers)
+    // Let invokeOllama() handle body.system properly
   } else {
     delete clean.system;
   }
@@ -1138,6 +1118,20 @@ function sanitizePayload(payload) {
     clean.messages = deduplicated;
   }
 
+  // [CONTEXT_FLOW] Log payload after sanitization
+  logger.debug({
+    providerType: config.modelProvider?.type ?? "databricks",
+    phase: "after_sanitize",
+    systemField: typeof clean.system === 'string'
+      ? { type: 'string', length: clean.system.length }
+      : clean.system
+        ? { type: typeof clean.system, value: clean.system }
+        : undefined,
+    messageCount: clean.messages?.length ?? 0,
+    firstMessageHasSystem: clean.messages?.[0]?.content?.includes?.('You are Claude Code') ?? false,
+    toolCount: clean.tools?.length ?? 0
+  }, '[CONTEXT_FLOW] After sanitizePayload');
+
   return clean;
 }
 
@@ -1370,6 +1364,15 @@ async function runAgentLoop({
         logger.warn({ err, sessionId: session?.id }, 'Memory retrieval failed, continuing without memories');
       }
     }
+
+    // [CONTEXT_FLOW] Log after memory injection
+    logger.debug({
+      sessionId: session?.id ?? null,
+      phase: "after_memory",
+      systemPromptLength: cleanPayload.system?.length ?? 0,
+      messageCount: cleanPayload.messages?.length ?? 0,
+      toolCount: cleanPayload.tools?.length ?? 0
+    }, '[CONTEXT_FLOW] After memory injection');
 
     if (steps === 1 && (config.systemPrompt?.mode === 'dynamic' || config.systemPrompt?.toolDescriptions === 'minimal')) {
       try {
