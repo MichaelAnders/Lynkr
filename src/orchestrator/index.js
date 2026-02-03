@@ -839,6 +839,20 @@ function sanitizePayload(payload) {
     const modelSupportsTools = modelNameSupportsTools(config.ollama?.model);
 
     if (!modelSupportsTools) {
+      logger.info(
+        {
+        //  sessionId: session?.id ?? null,
+          model: config.ollama?.model,
+        //  steps,
+        //  toolCallsExecuted,
+        //  uniqueToolSignatures: toolCallHistory.size,
+        //  toolCallLoopWarnings: loopWarningInjected ? 1 : 0,
+        //  durationMs: finalDurationMs,
+        //  avgDurationPerStep: steps > 0 ? Math.round(finalDurationMs / steps) : 0,
+        },
+        "Ollama does not support the model",
+      );
+
       // Filter out tool_result content blocks for models without tool support
       clean.messages = clean.messages
         .map((msg) => {
@@ -862,6 +876,20 @@ function sanitizePayload(payload) {
     } else {
       // Keep tool blocks for tool-capable models
       // But flatten content to simple string for better compatibility
+      logger.info(
+        {
+          //sessionId: session?.id ?? null,
+          model: config.ollama?.model,
+          //steps,
+          //toolCallsExecuted,
+          //uniqueToolSignatures: toolCallHistory.size,
+          //toolCallLoopWarnings: loopWarningInjected ? 1 : 0,
+          //durationMs: finalDurationMs,
+          //avgDurationPerStep: steps > 0 ? Math.round(finalDurationMs / steps) : 0,
+        },
+        "Ollama supports the model",
+      );
+
       clean.messages = clean.messages.map((msg) => {
         if (Array.isArray(msg.content)) {
           const textBlocks = msg.content.filter(
@@ -1236,6 +1264,19 @@ async function runAgentLoop({
   const toolCallNames = new Map();
   const toolCallHistory = new Map(); // Track tool calls to detect loops: signature -> count
   let loopWarningInjected = false; // Track if we've already warned about loops
+
+  // Log agent loop start
+  logger.info(
+    {
+      sessionId: session?.id ?? null,
+      model: requestedModel,
+      maxSteps: settings.maxSteps,
+      maxDurationMs: settings.maxDurationMs,
+      wantsThinking,
+      providerType,
+    },
+    "Agent loop started",
+  );
 
   while (steps < settings.maxSteps) {
     if (Date.now() - start > settings.maxDurationMs) {
