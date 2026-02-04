@@ -1681,6 +1681,20 @@ async function runAgentLoop({
     }
   }
 
+    // DIAGNOSTIC: Log response structure to identify early return cause
+    logger.info({
+      sessionId: session?.id ?? null,
+      providerType,
+      hasStream: databricksResponse.stream !== undefined,
+      streamValue: databricksResponse.stream ? "truthy" : "falsy/undefined",
+      hasJson: databricksResponse.json !== undefined,
+      jsonKeys: databricksResponse.json ? Object.keys(databricksResponse.json) : [],
+      ok: databricksResponse.ok,
+      status: databricksResponse.status,
+      hasMessage: !!databricksResponse.json?.message,
+      messageKeys: databricksResponse.json?.message ? Object.keys(databricksResponse.json.message) : []
+    }, "=== RESPONSE STRUCTURE DIAGNOSTIC ===");
+
     // Handle streaming responses (pass through without buffering)
     if (databricksResponse.stream) {
       logger.debug(
@@ -1753,6 +1767,7 @@ async function runAgentLoop({
     let toolCalls = [];
 
     if (providerType === "azure-anthropic") {
+      logger.info({ providerType }, "=== TOOL EXTRACTION: azure-anthropic branch ===");
       // Anthropic format: { content: [{ type: "tool_use", ... }], stop_reason: "tool_use" }
       message = {
         content: databricksResponse.json?.content ?? [],
@@ -1830,6 +1845,7 @@ async function runAgentLoop({
         "LLM Response: Tool calls requested (after deduplication)",
       );
     } else if (providerType === "ollama") {
+      logger.info({ providerType }, "=== TOOL EXTRACTION: ollama branch ===");
       // Ollama format: { message: { role, content, tool_calls }, done }
       message = databricksResponse.json?.message ?? {};
       toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
@@ -1844,6 +1860,7 @@ async function runAgentLoop({
         fullResponseMessage: JSON.stringify(databricksResponse.json?.message)
       }, "=== OLLAMA TOOL CALLS EXTRACTION ===");
     } else {
+      logger.info({ providerType }, "=== TOOL EXTRACTION: default branch ===");
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
       const choice = databricksResponse.json?.choices?.[0];
       message = choice?.message ?? {};
@@ -1904,6 +1921,22 @@ async function runAgentLoop({
         );
       }
     }
+
+    // DIAGNOSTIC: Show final extraction results before tool handling
+    logger.info({
+      providerType,
+      toolCallsCount: toolCalls.length,
+      toolCallsData: toolCalls.map(tc => {
+        const args = tc.function?.arguments ?? tc.arguments ?? "";
+        const argsStr = typeof args === 'string' ? args : JSON.stringify(args);
+        return {
+          id: tc.id,
+          name: tc.function?.name ?? tc.name,
+          hasArguments: !!args,
+          argumentsPreview: argsStr.substring(0, 100)
+        };
+      })
+    }, "=== FINAL TOOL CALLS AFTER EXTRACTION ===");
 
     if (toolCalls.length > 0) {
       // Convert OpenAI/OpenRouter format to Anthropic format for session storage
