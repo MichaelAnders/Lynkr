@@ -2969,9 +2969,40 @@ async function runAgentLoop({
         totalToolCallsInThisStep: toolCalls.length,
         messageCount: cleanPayload.messages.length,
         lastMessageRole: cleanPayload.messages[cleanPayload.messages.length - 1]?.role,
-      }, "LOOP CONTINUES: Tool execution complete - going back for next LLM call");
+      }, "Tool execution complete");
 
-      continue;
+      // Return tool results directly to CLI - no more LLM call needed
+      // The tool result IS the answer (e.g., file contents for Read)
+      if (accumulatedToolResults.length > 0) {
+        auditLog("=== RETURNING TOOL RESULTS DIRECTLY TO CLI ===", {
+          sessionId: session?.id ?? null,
+          toolResultCount: accumulatedToolResults.length,
+          toolNames: accumulatedToolResults.map(r => r.tool_name)
+        });
+
+        const directResponse = {
+          id: `msg_${Date.now()}`,
+          type: "message",
+          role: "assistant",
+          content: accumulatedToolResults,
+          model: requestedModel,
+          stop_reason: "tool_use",
+          usage: { input_tokens: 0, output_tokens: 0 }
+        };
+
+        return {
+          response: {
+            status: 200,
+            body: directResponse,
+            terminationReason: "tool_result_direct",
+          },
+          steps,
+          durationMs: Date.now() - start,
+          terminationReason: "tool_result_direct",
+        };
+      }
+
+      continue; // Only if no tool results (shouldn't happen)
     }
 
     // This runs when toolCalls.length === 0 (skipped tool execution)
