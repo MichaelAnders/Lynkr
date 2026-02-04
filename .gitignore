@@ -24,3 +24,6 @@ docs/GSD_LEARNINGS.md
 LYNKR-TUI-PLAN.md
 HEADROOM_PORT_PLAN.md
 HEADROOM_SIDECAR_PLAN.md
+# Test scripts
+test-*.sh
+lynkr.log
