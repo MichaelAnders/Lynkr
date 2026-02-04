@@ -105,6 +105,43 @@ function convertAnthropicToolsToOllama(anthropicTools) {
 }
 
 /**
+ * Extract tool call from text when LLM outputs JSON instead of using tool_calls
+ * Handles formats like: {"name": "Read", "parameters": {...}}
+ *
+ * @param {string} text - Text content that may contain JSON tool call
+ * @returns {object|null} - Tool call object in Ollama format, or null if not found
+ */
+function extractToolCallFromText(text) {
+  if (!text || typeof text !== 'string') return null;
+
+  // Look for JSON object with "name" and "parameters" keys
+  // Match the outermost JSON object containing these keys
+  const jsonMatch = text.match(/\{[^{}]*"name"\s*:\s*"(\w+)"[^{}]*"parameters"\s*:\s*(\{[^{}]*\})[^{}]*\}/);
+  if (!jsonMatch) return null;
+
+  try {
+    const toolName = jsonMatch[1];
+    const params = JSON.parse(jsonMatch[2]);
+
+    logger.info({
+      toolName,
+      params,
+      originalText: text.substring(0, 200)
+    }, "Extracted tool call from text content (fallback parsing)");
+
+    return {
+      function: {
+        name: toolName,
+        arguments: params
+      }
+    };
+  } catch (e) {
+    logger.debug({ error: e.message, text: text.substring(0, 200) }, "Failed to parse extracted tool call");
+    return null;
+  }
+}
+
+/**
  * Convert Ollama tool call response to Anthropic format
  *
  * Ollama format (actual):
@@ -134,8 +171,17 @@ function convertAnthropicToolsToOllama(anthropicTools) {
  */
 function convertOllamaToolCallsToAnthropic(ollamaResponse) {
   const message = ollamaResponse?.message || {};
-  const toolCalls = message.tool_calls || [];
+  let toolCalls = message.tool_calls || [];
   const textContent = message.content || "";
+
+  // FALLBACK: If no tool_calls but text contains JSON tool call, parse it
+  if (toolCalls.length === 0 && textContent) {
+    const extracted = extractToolCallFromText(textContent);
+    if (extracted) {
+      logger.info({ extractedTool: extracted.function?.name }, "Using fallback text parsing for tool call");
+      toolCalls = [extracted];
+    }
+  }
 
   const contentBlocks = [];
 
@@ -228,4 +274,5 @@ module.exports = {
   convertOllamaToolCallsToAnthropic,
   buildAnthropicResponseFromOllama,
   modelNameSupportsTools,
+  extractToolCallFromText,
 };

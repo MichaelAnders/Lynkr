@@ -360,10 +360,7 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
     });
 
     // Legacy streaming wrapper (for tool-based requests that requested streaming)
-    // Also stream SSE for tool_result blocks even if stream:false was requested
-    // This ensures the CLI can display tool results properly
-    const hasToolResults = result.body?.content?.some(block => block.type === 'tool_result');
-    if ((wantsStream && hasTools) || hasToolResults) {
+    if (wantsStream && hasTools) {
       logger.info({
         sessionId: req.headers['x-claude-session-id'],
         pathType: 'legacy_streaming_wrapper',
