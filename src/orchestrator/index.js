@@ -1736,16 +1736,41 @@ async function runAgentLoop({
           _anthropic_block: block,
         }));
 
+      // Deduplicate tool calls within a single response
+      // LLM sometimes requests the same tool multiple times with identical parameters
+      const uniqueToolCalls = [];
+      const seenSignatures = new Set();
+      let duplicatesRemoved = 0;
+
+      for (const call of toolCalls) {
+        const signature = getToolCallSignature(call);
+        if (!seenSignatures.has(signature)) {
+          seenSignatures.add(signature);
+          uniqueToolCalls.push(call);
+        } else {
+          duplicatesRemoved++;
+          logger.warn({
+            sessionId: session?.id ?? null,
+            toolName: call.function?.name || call.name,
+            toolId: call.id,
+            signature: signature.substring(0, 32),
+          }, "Duplicate tool call removed (same tool with identical parameters in single response)");
+        }
+      }
+
+      toolCalls = uniqueToolCalls;
+
       logger.info(
         {
           sessionId: session?.id ?? null,
           step: steps,
           contentBlocks: contentArray.length,
           toolCallsFound: toolCalls.length,
+          duplicatesRemoved,
           toolNames: toolCalls.map(tc => tc.function?.name || tc.name),
           stopReason: databricksResponse.json?.stop_reason,
         },
-        "LLM Response: Tool calls requested",
+        "LLM Response: Tool calls requested (after deduplication)",
       );
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
