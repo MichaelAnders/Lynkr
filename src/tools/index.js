@@ -28,6 +28,10 @@ const TOOL_ALIASES = {
   list: "workspace_list",
   ls: "workspace_list",
   dir: "workspace_list",
+  // Glob has dedicated tool in src/tools/indexer.js (registerGlobTool)
+  // - returns plain text format instead of JSON
+  // glob: "workspace_list",
+  // Glob: "workspace_list",
   summary: "project_summary",
   projectsummary: "project_summary",
   overview: "project_summary",
