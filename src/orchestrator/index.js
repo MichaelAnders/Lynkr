@@ -2755,6 +2755,24 @@ async function runAgentLoop({
 
         cleanPayload.messages.push(toolMessage);
 
+        // !!!!! VISIBLE LOGGING - TOOL RESULT SENT TO LLM !!!!!
+        auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+        auditLog("=== TOOL RESULT CONTENT SENT TO LLM ===", {
+          toolName: execution.name,
+          content: typeof toolMessage.content === 'string'
+            ? toolMessage.content.substring(0, 500)
+            : JSON.stringify(toolMessage.content).substring(0, 500)
+        });
+        auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+        auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+
         // Convert to Anthropic format for session storage
         let sessionToolResultContent;
         if (providerType === "azure-anthropic") {
@@ -3605,6 +3623,32 @@ async function runAgentLoop({
         contentAfterPrepend: anthropicPayload.content.length,
         finalContentTypes: anthropicPayload.content.map(b => b.type)
       });
+
+      // !!!!! VISIBLE LOGGING - WHAT GOES TO CLI !!!!!
+      auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+      for (const block of anthropicPayload.content) {
+        if (block.type === "tool_result") {
+          auditLog("=== TOOL RESULT CONTENT SENT TO CLI ===", {
+            toolName: block.tool_name,
+            content: typeof block.content === 'string'
+              ? block.content.substring(0, 500)
+              : JSON.stringify(block.content).substring(0, 500)
+          });
+        } else if (block.type === "text") {
+          auditLog("=== TEXT CONTENT SENT TO CLI ===", {
+            text: block.text.substring(0, 500)
+          });
+        }
+      }
+      auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+      auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
     } else {
       auditLog("=== NO TOOL RESULTS TO INCLUDE (accumulatedToolResults empty) ===", {
         sessionId: session?.id ?? null
