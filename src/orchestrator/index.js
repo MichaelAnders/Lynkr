@@ -1736,14 +1736,16 @@ async function runAgentLoop({
           _anthropic_block: block,
         }));
 
-      logger.debug(
+      logger.info(
         {
           sessionId: session?.id ?? null,
+          step: steps,
           contentBlocks: contentArray.length,
           toolCallsFound: toolCalls.length,
+          toolNames: toolCalls.map(tc => tc.function?.name || tc.name),
           stopReason: databricksResponse.json?.stop_reason,
         },
-        "Azure Anthropic response parsed",
+        "LLM Response: Tool calls requested",
       );
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
@@ -2435,6 +2437,15 @@ async function runAgentLoop({
           };
         }
       }
+
+      logger.info({
+        sessionId: session?.id ?? null,
+        step: steps,
+        toolCallsExecuted: toolCallsExecuted,
+        totalToolCallsInThisStep: toolCalls.length,
+        messageCount: cleanPayload.messages.length,
+        lastMessageRole: cleanPayload.messages[cleanPayload.messages.length - 1]?.role,
+      }, "LOOP CONTINUES: Tool execution complete - going back for next LLM call");
 
       continue;
     }
