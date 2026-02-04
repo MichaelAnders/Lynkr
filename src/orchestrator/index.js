@@ -998,6 +998,7 @@ function sanitizePayload(payload) {
       // Limit to essential tools only
       const OLLAMA_ESSENTIAL_TOOLS = new Set([
         "Bash",
+        "shell",  // Tool is registered as "shell" internally
         "Read",
         "Write",
         "Edit",
