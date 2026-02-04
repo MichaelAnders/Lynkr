@@ -1329,7 +1329,7 @@ async function runAgentLoop({
   const toolCallNames = new Map();
   const toolCallHistory = new Map(); // Track tool calls to detect loops: signature -> count
   let loopWarningInjected = false; // Track if we've already warned about loops
-  let accumulatedContentBlocks = []; // Accumulate tool_use blocks for final response (server-side execution)
+  const accumulatedToolResults = []; // Track tool results to include in response for CLI display
 
   // Log agent loop start
   logger.info(
@@ -2205,18 +2205,6 @@ async function runAgentLoop({
       // Check if tool execution should happen on client side
       const executionMode = config.toolExecutionMode || "server";
 
-      // Save tool_use blocks for final response when doing server-side execution
-      if (executionMode === "server" && sessionContent && Array.isArray(sessionContent)) {
-        // Only save tool_use blocks (not text blocks)
-        const toolUseBlocks = sessionContent.filter(block => block.type === "tool_use");
-        accumulatedContentBlocks.push(...toolUseBlocks);
-        auditLog("=== SAVED TOOL_USE BLOCKS FOR FINAL RESPONSE ===", {
-          sessionId: session?.id ?? null,
-          toolUseBlockCount: toolUseBlocks.length,
-          totalAccumulated: accumulatedContentBlocks.length
-        });
-      }
-
       auditLog("=== TOOL HANDLING STARTED ===", {
         sessionId: session?.id ?? null,
         toolCallCount: toolCalls.length,
@@ -2796,6 +2784,20 @@ async function runAgentLoop({
           },
         });
 
+        // Accumulate tool results for CLI display
+        // Build a standardized tool_result block in Anthropic format
+        const toolUseId = call.id ?? execution.id;
+        const toolResultContent = typeof execution.content === "string"
+          ? execution.content
+          : JSON.stringify(execution.content);
+        accumulatedToolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          tool_name: call.function?.name ?? call.name ?? execution.name,
+          content: toolResultContent,
+          is_error: execution.ok === false,
+        });
+
         if (execution.ok) {
           logger.debug(
             {
@@ -3177,16 +3179,11 @@ async function runAgentLoop({
       willTriggerFallback: !!(fallbackCandidate && !fallbackPerformed)
     });
 
-    // Prepend accumulated tool_use blocks to final response (for server-side execution)
-    if (accumulatedContentBlocks.length > 0 && Array.isArray(anthropicPayload.content)) {
-      anthropicPayload.content = [...accumulatedContentBlocks, ...anthropicPayload.content];
-      auditLog("=== PREPENDED TOOL_USE BLOCKS TO FINAL RESPONSE ===", {
-        sessionId: session?.id ?? null,
-        toolUseBlockCount: accumulatedContentBlocks.length,
-        finalContentLength: anthropicPayload.content.length,
-        contentTypes: anthropicPayload.content.map(b => b.type)
-      });
-    }
+    auditLog("=== BEFORE WEB FALLBACK CHECK ===", {
+      sessionId: session?.id ?? null,
+      hasFallbackCandidate: !!fallbackCandidate,
+      willEnterFallbackBlock: !!(fallbackCandidate && !fallbackPerformed)
+    });
 
     if (fallbackCandidate && !fallbackPerformed) {
       if (providerType === "azure-anthropic") {
@@ -3456,12 +3453,37 @@ async function runAgentLoop({
       }
     }
 
-    appendTurnToSession(session, {
-      role: "assistant",
-      type: "message",
-      status: 200,
-      content: anthropicPayload,
-      metadata: { termination: "completion" },
+    auditLog("=== ABOUT TO APPEND FINAL TURN TO SESSION ===", {
+      sessionId: session?.id ?? null,
+      hasAnthropicPayload: !!anthropicPayload,
+      contentBlockCount: anthropicPayload?.content?.length || 0
+    });
+
+    // Defer database operation to next tick to avoid blocking response delivery
+    setImmediate(() => {
+      try {
+        appendTurnToSession(session, {
+          role: "assistant",
+          type: "message",
+          status: 200,
+          content: anthropicPayload,
+          metadata: { termination: "completion" },
+        });
+        auditLog("=== SUCCESSFULLY APPENDED TURN TO SESSION ===", {
+          sessionId: session?.id ?? null
+        });
+      } catch (error) {
+        auditLog("=== ERROR APPENDING TURN TO SESSION ===", {
+          sessionId: session?.id ?? null,
+          error: error.message,
+          stack: error.stack
+        });
+        // Continue anyway - don't let session storage block the response
+      }
+    });
+
+    auditLog("=== DEFERRED SESSION APPEND TO NEXT TICK ===", {
+      sessionId: session?.id ?? null
     });
 
     if (cacheKey && steps === 1 && toolCallsExecuted === 0) {
@@ -3509,6 +3531,25 @@ async function runAgentLoop({
       },
       "Agent loop completed successfully",
     );
+
+    // Include accumulated tool results in the response for CLI display
+    // This ensures the client sees actual tool output, not just LLM summaries
+    if (accumulatedToolResults.length > 0) {
+      // Ensure content is an array
+      if (!Array.isArray(anthropicPayload.content)) {
+        anthropicPayload.content = anthropicPayload.content
+          ? [{ type: "text", text: String(anthropicPayload.content) }]
+          : [];
+      }
+      // Prepend tool results before text content so they appear in order
+      anthropicPayload.content = [...accumulatedToolResults, ...anthropicPayload.content];
+
+      logger.info({
+        sessionId: session?.id ?? null,
+        toolResultCount: accumulatedToolResults.length,
+        toolNames: accumulatedToolResults.map(r => r.tool_name),
+      }, "Including tool results in response for CLI display");
+    }
 
     // DIAGNOSTIC: Log response being returned
     logger.info({

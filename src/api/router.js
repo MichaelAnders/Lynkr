@@ -435,6 +435,29 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
 
           res.write(`event: content_block_stop\n`);
           res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
+        } else if (block.type === "tool_result") {
+          // Stream tool_result blocks so CLI can display actual tool output
+          res.write(`event: content_block_start\n`);
+          res.write(`data: ${JSON.stringify({
+            type: "content_block_start",
+            index: i,
+            content_block: { type: "tool_result", tool_use_id: block.tool_use_id, content: "" }
+          })}\n\n`);
+
+          // Stream the actual content
+          const content = typeof block.content === 'string'
+            ? block.content
+            : JSON.stringify(block.content);
+
+          res.write(`event: content_block_delta\n`);
+          res.write(`data: ${JSON.stringify({
+            type: "content_block_delta",
+            index: i,
+            delta: { type: "tool_result_delta", content: content }
+          })}\n\n`);
+
+          res.write(`event: content_block_stop\n`);
+          res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
         }
       }
 
