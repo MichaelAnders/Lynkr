@@ -966,8 +966,15 @@ function sanitizePayload(payload) {
       }
 
       // Very short messages (< 20 chars) without code/technical keywords
+      // BUT: Common shell commands should NOT be treated as conversational
+      const shellCommands = /^(pwd|ls|cd|cat|echo|grep|find|ps|top|df|du|whoami|which|env)[\s\.\!\?]*$/;
+      if (shellCommands.test(trimmed)) {
+        logger.info({ matched: "shell_command", trimmed }, "Ollama conversational check - SHELL COMMAND detected, keeping tools");
+        return false; // NOT conversational - needs tools!
+      }
+
       if (trimmed.length < 20 && !/code|file|function|error|bug|fix|write|read|create/.test(trimmed)) {
-        logger.debug({ matched: "short", trimmed, length: trimmed.length }, "Ollama conversational check - matched");
+        logger.warn({ matched: "short", trimmed, length: trimmed.length }, "Ollama conversational check - SHORT MESSAGE matched, DELETING TOOLS");
         return true;
       }
 
@@ -977,12 +984,15 @@ function sanitizePayload(payload) {
 
     if (isConversational) {
       // Strip all tools for simple conversational messages
+      const originalToolCount = Array.isArray(clean.tools) ? clean.tools.length : 0;
       delete clean.tools;
       delete clean.tool_choice;
-      logger.debug({
+      logger.warn({
         model: config.ollama?.model,
-        message: "Removed tools for conversational message"
-      }, "Ollama conversational mode");
+        message: "Removed tools for conversational message",
+        originalToolCount,
+        userMessage: clean.messages?.[clean.messages.length - 1]?.content?.substring(0, 50),
+      }, "Ollama conversational mode - ALL TOOLS DELETED!");
     } else if (modelSupportsTools && Array.isArray(clean.tools) && clean.tools.length > 0) {
       // Ollama performance degrades with too many tools
       // Limit to essential tools only
