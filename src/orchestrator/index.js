@@ -997,23 +997,48 @@ function sanitizePayload(payload) {
         "WebFetch"
       ]);
 
-      const limitedTools = clean.tools.filter(tool =>
-        OLLAMA_ESSENTIAL_TOOLS.has(tool.name)
-      );
+      // Log original tool names BEFORE filtering
+      logger.info({
+        model: config.ollama?.model,
+        originalToolNames: clean.tools.map(t => t.name),
+        essentialTools: Array.from(OLLAMA_ESSENTIAL_TOOLS),
+      }, "Ollama tools BEFORE filtering");
 
-      logger.debug({
+      const limitedTools = clean.tools.filter(tool => {
+        const isEssential = OLLAMA_ESSENTIAL_TOOLS.has(tool.name);
+        logger.info({
+          toolName: tool.name,
+          isEssential,
+          inEssentialList: OLLAMA_ESSENTIAL_TOOLS.has(tool.name),
+        }, `Ollama tool filtering: ${tool.name}`);
+        return isEssential;
+      });
+
+      logger.info({
         model: config.ollama?.model,
         originalToolCount: clean.tools.length,
         limitedToolCount: limitedTools.length,
-        keptTools: limitedTools.map(t => t.name)
-      }, "Ollama tools limited for performance");
+        originalTools: clean.tools.map(t => t.name),
+        keptTools: limitedTools.map(t => t.name),
+        removedTools: clean.tools.filter(t => !limitedTools.includes(t)).map(t => t.name),
+      }, "Ollama tools AFTER filtering");
 
       clean.tools = limitedTools.length > 0 ? limitedTools : undefined;
       if (!clean.tools) {
+        logger.warn({
+          model: config.ollama?.model,
+          reason: "limitedTools.length === 0",
+        }, "Ollama tools deleted - NO TOOLS AVAILABLE!");
         delete clean.tools;
       }
     } else {
       // Remove tools for models without tool support
+      logger.warn({
+        model: config.ollama?.model,
+        modelSupportsTools,
+        hasTools: Array.isArray(clean.tools),
+        toolsLength: Array.isArray(clean.tools) ? clean.tools.length : 0,
+      }, "Ollama tools deleted - model does not support tools or no tools provided");
       delete clean.tools;
       delete clean.tool_choice;
     }
