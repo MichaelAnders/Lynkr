@@ -833,6 +833,10 @@ function sanitizePayload(payload) {
         : "claude-opus-4-5";
     clean.model = azureDefaultModel;
   } else if (providerType === "ollama") {
+    // Override client model with Ollama config model
+    const ollamaConfiguredModel = config.ollama?.model;
+    clean.model = ollamaConfiguredModel;
+
     // Ollama format conversion
     // Check if model supports tools
     const { modelNameSupportsTools } = require("../clients/ollama-utils");
@@ -1611,7 +1615,41 @@ async function runAgentLoop({
     } else if (databricksResponse.ok && databricksResponse.json) {
       // Log successful non-streaming response
       const message = databricksResponse.json;
-      const assistantMessage = message.content ?? message.choices?.[0]?.message;
+
+      // Handle different response formats by provider
+      let assistantMessage, stopReason;
+
+      if (providerType === 'ollama') {
+        // Ollama format: { message: { role, content, tool_calls }, done }
+        const ollamaMsg = message.message || {};
+        assistantMessage = ollamaMsg.content;
+
+        // Debug logging for Ollama responses
+        logger.info({
+          hasMessage: !!message.message,
+          hasContent: !!ollamaMsg.content,
+          contentLength: ollamaMsg.content?.length || 0,
+          hasToolCalls: !!ollamaMsg.tool_calls,
+          toolCallCount: ollamaMsg.tool_calls?.length || 0,
+          done: message.done
+        }, "Ollama response structure");
+
+        // If no content but has tool_calls, log tool call info
+        if (!assistantMessage && ollamaMsg.tool_calls?.length > 0) {
+          const toolNames = ollamaMsg.tool_calls.map(tc => tc.function?.name).join(', ');
+          assistantMessage = `[Tool calls: ${toolNames}]`;
+          logger.info({
+            toolCallsPresent: true,
+            toolNames
+          }, "Ollama response contains tool calls (no text content)");
+        }
+
+        stopReason = message.done ? "stop" : null;
+      } else {
+        // OpenAI/Anthropic format: { content, stop_reason } or { choices: [...] }
+        assistantMessage = message.content ?? message.choices?.[0]?.message;
+        stopReason = message.stop_reason ?? message.choices?.[0]?.finish_reason ?? null;
+      }
 
       auditLogger.logLlmResponse({
         correlationId,
@@ -1621,7 +1659,7 @@ async function runAgentLoop({
         stream: false,
         destinationUrl: getDestinationUrl(providerType),
         assistantMessage,
-        stopReason: message.stop_reason ?? message.choices?.[0]?.finish_reason ?? null,
+        stopReason,
         requestTokens: actualUsage?.input_tokens ?? actualUsage?.prompt_tokens ?? null,
         responseTokens: actualUsage?.output_tokens ?? actualUsage?.completion_tokens ?? null,
         latencyMs,
@@ -1738,17 +1776,32 @@ async function runAgentLoop({
 
       // Deduplicate tool calls within a single response
       // LLM sometimes requests the same tool multiple times with identical parameters
+      // DEBUG: Write raw tool calls to file (Anthropic format)
+      const fs = require('fs');
+      fs.appendFileSync('/tmp/tool-calls-debug.log',
+        `\n=== ${new Date().toISOString()} [ANTHROPIC FORMAT] ===\n` +
+        `Raw tool calls (${toolCalls.length}):\n` +
+        JSON.stringify(toolCalls, null, 2) + '\n'
+      );
+
       const uniqueToolCalls = [];
       const seenSignatures = new Set();
       let duplicatesRemoved = 0;
 
       for (const call of toolCalls) {
         const signature = getToolCallSignature(call);
+
+        // DEBUG: Log each signature
+        fs.appendFileSync('/tmp/tool-calls-debug.log',
+          `Signature: ${signature} | Tool: ${call.function?.name || call.name} | ID: ${call.id}\n`
+        );
+
         if (!seenSignatures.has(signature)) {
           seenSignatures.add(signature);
           uniqueToolCalls.push(call);
         } else {
           duplicatesRemoved++;
+          fs.appendFileSync('/tmp/tool-calls-debug.log', `  ^^ DUPLICATE DETECTED!\n`);
           logger.warn({
             sessionId: session?.id ?? null,
             toolName: call.function?.name || call.name,
@@ -1757,6 +1810,10 @@ async function runAgentLoop({
           }, "Duplicate tool call removed (same tool with identical parameters in single response)");
         }
       }
+
+      fs.appendFileSync('/tmp/tool-calls-debug.log',
+        `Result: ${uniqueToolCalls.length} unique, ${duplicatesRemoved} duplicates removed\n`
+      );
 
       toolCalls = uniqueToolCalls;
 
@@ -1772,6 +1829,18 @@ async function runAgentLoop({
         },
         "LLM Response: Tool calls requested (after deduplication)",
       );
+    } else if (providerType === "ollama") {
+      // Ollama format: { message: { role, content, tool_calls }, done }
+      message = databricksResponse.json?.message ?? {};
+      toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+      logger.info({
+        hasMessage: !!databricksResponse.json?.message,
+        hasToolCalls: toolCalls.length > 0,
+        toolCallCount: toolCalls.length,
+        toolNames: toolCalls.map(tc => tc.function?.name),
+        done: databricksResponse.json?.done
+      }, "Ollama tool calls extraction");
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
       const choice = databricksResponse.json?.choices?.[0];
@@ -1780,17 +1849,32 @@ async function runAgentLoop({
 
       // Deduplicate tool calls for OpenAI format too
       if (toolCalls.length > 0) {
+        // DEBUG: Write raw tool calls to file
+        const fs = require('fs');
+        fs.appendFileSync('/tmp/tool-calls-debug.log',
+          `\n=== ${new Date().toISOString()} ===\n` +
+          `Raw tool calls (${toolCalls.length}):\n` +
+          JSON.stringify(toolCalls, null, 2) + '\n'
+        );
+
         const uniqueToolCalls = [];
         const seenSignatures = new Set();
         let duplicatesRemoved = 0;
 
         for (const call of toolCalls) {
           const signature = getToolCallSignature(call);
+
+          // DEBUG: Log each signature
+          fs.appendFileSync('/tmp/tool-calls-debug.log',
+            `Signature: ${signature} | Tool: ${call.function?.name || call.name} | ID: ${call.id}\n`
+          );
+
           if (!seenSignatures.has(signature)) {
             seenSignatures.add(signature);
             uniqueToolCalls.push(call);
           } else {
             duplicatesRemoved++;
+            fs.appendFileSync('/tmp/tool-calls-debug.log', `  ^^ DUPLICATE DETECTED!\n`);
             logger.warn({
               sessionId: session?.id ?? null,
               toolName: call.function?.name || call.name,
@@ -1799,6 +1883,10 @@ async function runAgentLoop({
             }, "Duplicate tool call removed (same tool with identical parameters in single response)");
           }
         }
+
+        fs.appendFileSync('/tmp/tool-calls-debug.log',
+          `Result: ${uniqueToolCalls.length} unique, ${duplicatesRemoved} duplicates removed\n`
+        );
 
         toolCalls = uniqueToolCalls;
 
@@ -2348,6 +2436,21 @@ async function runAgentLoop({
             ),
           );
 
+        } else if (providerType === "ollama") {
+          // Ollama format: uses tool_name instead of tool_call_id
+          toolMessage = {
+            role: "tool",
+            content: typeof execution.content === "string"
+              ? execution.content
+              : JSON.stringify(execution.content),
+            tool_name: call.function?.name ?? call.name ?? execution.name,
+          };
+
+          logger.info({
+            toolName: toolMessage.tool_name,
+            contentLength: toolMessage.content?.length || 0,
+            executionOk: execution.ok
+          }, "Ollama tool result formatted");
         } else {
           // OpenAI format: tool_call_id MUST match the id from assistant's tool_call
           toolMessage = {

@@ -146,6 +146,19 @@ async function performJsonRequest(url, { headers = {}, body }, providerLabel) {
       json = null;
     }
 
+    // DEBUG: Log Ollama response structure
+    if (providerLabel === "Ollama") {
+      logger.info({
+        hasJson: !!json,
+        jsonKeys: json ? Object.keys(json) : [],
+        hasMessage: !!json?.message,
+        messageKeys: json?.message ? Object.keys(json.message) : [],
+        contentPreview: json?.message?.content?.substring(0, 100),
+        done: json?.done,
+        textLength: text.length
+      }, "=== OLLAMA RAW RESPONSE DEBUG ===");
+    }
+
     const result = {
       ok: response.ok,
       status: response.status,
