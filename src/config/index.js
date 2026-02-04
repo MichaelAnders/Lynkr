@@ -170,6 +170,7 @@ if (!["server", "client", "passthrough"].includes(toolExecutionMode)) {
     "TOOL_EXECUTION_MODE must be one of: server, client, passthrough (default: server)"
   );
 }
+console.log(`[CONFIG] Tool execution mode: ${toolExecutionMode}`);
 
 // Memory system configuration (Titans-inspired long-term memory)
 const memoryEnabled = process.env.MEMORY_ENABLED !== "false"; // default true
