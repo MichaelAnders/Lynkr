@@ -1,4 +1,6 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const { processMessage } = require("../orchestrator");
 const { getSession } = require("../sessions");
 const metrics = require("../metrics");
@@ -7,6 +9,25 @@ const openaiRouter = require("./openai-router");
 const providersRouter = require("./providers-handler");
 const { getRoutingHeaders, getRoutingStats, analyzeComplexity } = require("../routing");
 const logger = require("../logger");
+const config = require("../config");
+
+// Inline audit log for debugging SSE streaming
+function auditLog(message, data = {}) {
+  if (!config.audit?.enabled) return;
+  try {
+    const auditLogPath = path.resolve(config.audit.logFile);
+    const logEntry = JSON.stringify({
+      level: "info",
+      time: new Date().toISOString(),
+      type: "router_sse_diagnostic",
+      msg: message,
+      ...data
+    }) + '\n';
+    fs.appendFileSync(auditLogPath, logEntry);
+  } catch (err) {
+    logger.warn({ error: err.message }, "Failed to write to audit log from router");
+  }
+}
 
 const router = express.Router();
 
@@ -437,13 +458,13 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
           res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
         } else if (block.type === "tool_result") {
           // === TOOL_RESULT SSE STREAMING - ENTERED ===
-          logger.info({
+          auditLog("=== SSE: STREAMING TOOL_RESULT BLOCK - START ===", {
             blockIndex: i,
             blockType: block.type,
             toolUseId: block.tool_use_id,
             contentType: typeof block.content,
             contentLength: typeof block.content === 'string' ? block.content.length : JSON.stringify(block.content).length
-          }, "=== SSE: STREAMING TOOL_RESULT BLOCK - START ===");
+          });
 
           // Stream tool_result blocks so CLI can display actual tool output
           res.write(`event: content_block_start\n`);
@@ -458,11 +479,11 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
             ? block.content
             : JSON.stringify(block.content);
 
-          logger.info({
+          auditLog("=== SSE: STREAMING TOOL_RESULT CONTENT ===", {
             blockIndex: i,
             contentLength: content.length,
             contentPreview: content.substring(0, 200)
-          }, "=== SSE: STREAMING TOOL_RESULT CONTENT ===");
+          });
 
           res.write(`event: content_block_delta\n`);
           res.write(`data: ${JSON.stringify({
@@ -475,10 +496,10 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
           res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
 
           // === TOOL_RESULT SSE STREAMING - COMPLETED ===
-          logger.info({
+          auditLog("=== SSE: STREAMING TOOL_RESULT BLOCK - END ===", {
             blockIndex: i,
             toolUseId: block.tool_use_id
-          }, "=== SSE: STREAMING TOOL_RESULT BLOCK - END ===");
+          });
         }
       }
 
