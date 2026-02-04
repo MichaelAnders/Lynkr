@@ -1818,6 +1818,23 @@ async function runAgentLoop({
     }
   }
 
+    // !!!!! VISIBLE LOGGING - RAW LLM RESPONSE !!!!!
+    auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+    auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+    auditLog("!!!!!!!!!!READ THIS START!!!!!!!!!!!", {});
+    auditLog("=== RAW LLM RESPONSE CONTENT ===", {
+      messageContent: databricksResponse.json?.message?.content
+        ? (typeof databricksResponse.json.message.content === 'string'
+          ? databricksResponse.json.message.content.substring(0, 500)
+          : JSON.stringify(databricksResponse.json.message.content).substring(0, 500))
+        : 'NO_CONTENT',
+      hasToolCalls: !!databricksResponse.json?.message?.tool_calls,
+      toolCallCount: databricksResponse.json?.message?.tool_calls?.length || 0
+    });
+    auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+    auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+    auditLog("!!!!!!!!!!READ THIS END!!!!!!!!!!!", {});
+
     // AUDIT: Confirm we reached post-response processing
     auditLog("=== POST-RESPONSE PROCESSING START ===", {
       sessionId: session?.id ?? null,
