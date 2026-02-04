@@ -2003,6 +2003,13 @@ async function runAgentLoop({
       // Check if tool execution should happen on client side
       const executionMode = config.toolExecutionMode || "server";
 
+      logger.info({
+        toolCallCount: toolCalls.length,
+        executionMode,
+        providerType,
+        configExecutionMode: config.toolExecutionMode
+      }, "=== TOOL HANDLING STARTED ===");
+
       // IMPORTANT: Task tools (subagents) and Web Search tools ALWAYS execute server-side
       // For Ollama: ALL file/shell tools MUST execute server-side to handle object-format arguments
       const serverSideToolCalls = [];
