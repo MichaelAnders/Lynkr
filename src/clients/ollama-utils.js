@@ -114,25 +114,47 @@ function convertAnthropicToolsToOllama(anthropicTools) {
 function extractToolCallFromText(text) {
   if (!text || typeof text !== 'string') return null;
 
-  // Look for JSON object with "name" and "parameters" keys
-  // Match the outermost JSON object containing these keys
-  const jsonMatch = text.match(/\{[^{}]*"name"\s*:\s*"(\w+)"[^{}]*"parameters"\s*:\s*(\{[^{}]*\})[^{}]*\}/);
-  if (!jsonMatch) return null;
+  // Find potential JSON start - look for {"name" pattern
+  const startMatch = text.match(/\{\s*"name"\s*:/);
+  if (!startMatch) return null;
+
+  const startIdx = startMatch.index;
+
+  // Find matching closing brace using brace counting
+  let braceCount = 0;
+  let endIdx = -1;
+  for (let i = startIdx; i < text.length; i++) {
+    if (text[i] === '{') braceCount++;
+    else if (text[i] === '}') {
+      braceCount--;
+      if (braceCount === 0) {
+        endIdx = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (endIdx === -1) return null;
+
+  const jsonStr = text.substring(startIdx, endIdx);
 
   try {
-    const toolName = jsonMatch[1];
-    const params = JSON.parse(jsonMatch[2]);
+    const parsed = JSON.parse(jsonStr);
+
+    if (!parsed.name || !parsed.parameters) {
+      return null;
+    }
 
     logger.info({
-      toolName,
-      params,
+      toolName: parsed.name,
+      params: parsed.parameters,
       originalText: text.substring(0, 200)
     }, "Extracted tool call from text content (fallback parsing)");
 
     return {
       function: {
-        name: toolName,
-        arguments: params
+        name: parsed.name,
+        arguments: parsed.parameters
       }
     };
   } catch (e) {

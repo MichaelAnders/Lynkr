@@ -2980,13 +2980,18 @@ async function runAgentLoop({
           toolNames: accumulatedToolResults.map(r => r.tool_name)
         });
 
+        // Convert tool_result blocks to text blocks for CLI display
+        // The CLI only understands text/tool_use in responses, not tool_result
         const directResponse = {
           id: `msg_${Date.now()}`,
           type: "message",
           role: "assistant",
-          content: accumulatedToolResults,
+          content: accumulatedToolResults.map(r => ({
+            type: "text",
+            text: r.content
+          })),
           model: requestedModel,
-          stop_reason: "tool_use",
+          stop_reason: "end_turn",
           usage: { input_tokens: 0, output_tokens: 0 }
         };
 
