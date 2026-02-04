@@ -121,6 +121,13 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
     const wantsStream = Boolean(req.query?.stream === 'true' || req.body?.stream);
     const hasTools = Array.isArray(req.body?.tools) && req.body.tools.length > 0;
 
+    logger.info({
+      sessionId: req.headers['x-claude-session-id'],
+      wantsStream,
+      hasTools,
+      willUseStreamingPath: wantsStream || hasTools
+    }, "=== REQUEST ROUTING DECISION ===");
+
     // Analyze complexity for routing headers (Phase 3)
     const complexity = analyzeComplexity(req.body);
     const routingHeaders = getRoutingHeaders({
@@ -333,6 +340,13 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
 
     // Legacy streaming wrapper (for tool-based requests that requested streaming)
     if (wantsStream && hasTools) {
+      logger.info({
+        sessionId: req.headers['x-claude-session-id'],
+        pathType: 'legacy_streaming_wrapper',
+        wantsStream,
+        hasTools
+      }, "=== USING LEGACY STREAMING WRAPPER (TOOL-BASED WITH STREAMING) ===");
+
       metrics.recordStreamingStart();
       res.set({
         "Content-Type": "text/event-stream",
@@ -353,6 +367,13 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
 
       // Use proper Anthropic SSE format
       const msg = result.body;
+
+      logger.info({
+        sessionId: req.headers['x-claude-session-id'],
+        eventType: 'message_start',
+        streamingWithTools: true,
+        hasContent: !!(msg.content && msg.content.length > 0)
+      }, "=== SENDING SSE MESSAGE_START ===");
 
       // 1. message_start
       res.write(`event: message_start\n`);
@@ -428,6 +449,12 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
       // 4. message_stop
       res.write(`event: message_stop\n`);
       res.write(`data: ${JSON.stringify({ type: "message_stop" })}\n\n`);
+
+      logger.info({
+        sessionId: req.headers['x-claude-session-id'],
+        eventsSent: ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'],
+        stopReason: msg.stop_reason
+      }, "=== SSE STREAM COMPLETED (TOOL-BASED) ===");
 
       metrics.recordResponse(result.status);
       res.end();

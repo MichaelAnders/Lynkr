@@ -15,6 +15,31 @@ const { createAuditLogger } = require("../logger/audit-logger");
 const { getResolvedIp, runWithDnsContext } = require("../clients/dns-logger");
 const { getShuttingDown } = require("../api/health");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
+
+/**
+ * Write diagnostic log entry directly to audit log file
+ * @param {string} message - Log message
+ * @param {object} data - Additional data to log
+ */
+function auditLog(message, data = {}) {
+  if (!config.audit?.enabled) return;
+
+  try {
+    const auditLogPath = path.resolve(config.audit.logFile);
+    const logEntry = JSON.stringify({
+      level: "info",
+      time: new Date().toISOString(),
+      type: "orchestrator_diagnostic",
+      msg: message,
+      ...data
+    }) + '\n';
+    fs.appendFileSync(auditLogPath, logEntry);
+  } catch (err) {
+    logger.warn({ error: err.message }, "Failed to write to audit log");
+  }
+}
 
 /**
  * Get destination URL for audit logging based on provider type
@@ -1304,6 +1329,7 @@ async function runAgentLoop({
   const toolCallNames = new Map();
   const toolCallHistory = new Map(); // Track tool calls to detect loops: signature -> count
   let loopWarningInjected = false; // Track if we've already warned about loops
+  let accumulatedContentBlocks = []; // Accumulate tool_use blocks for final response (server-side execution)
 
   // Log agent loop start
   logger.info(
@@ -1563,6 +1589,29 @@ async function runAgentLoop({
   // Generate correlation ID for request/response pairing
   const correlationId = `req_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 
+  // OLLAMA TOOL USAGE FIX: Inject explicit tool calling instructions
+  if (providerType === 'ollama' && cleanPayload.tools && cleanPayload.tools.length > 0) {
+    const toolInstructions = `\n\nIMPORTANT TOOL USAGE INSTRUCTIONS:
+- When you have tools available, you MUST use them by making proper function calls
+- NEVER output JSON text describing what tool you would use (e.g., {"name": "Read", "parameters": {...}})
+- NEVER output explanatory text like "I will use the X tool" or "The JSON for the function call is:"
+- If the user asks to read/cat a file, IMMEDIATELY call the Read tool - do not describe it
+- If the user asks to search/find/glob files, IMMEDIATELY call the Glob tool - do not describe it
+- Tool calls are made using the function calling format, NOT as JSON text in your response
+- After tools execute, you will receive their results and can then respond about the content`;
+
+    if (cleanPayload.system) {
+      cleanPayload.system = cleanPayload.system + toolInstructions;
+    } else {
+      cleanPayload.system = toolInstructions.trim();
+    }
+
+    logger.info({
+      sessionId: session?.id ?? null,
+      toolCount: cleanPayload.tools.length
+    }, "Injected Ollama tool usage instructions into system prompt");
+  }
+
   // Log LLM request before invocation
   if (auditLogger.enabled) {
     auditLogger.logLlmRequest({
@@ -1579,7 +1628,95 @@ async function runAgentLoop({
     });
   }
 
+  // ============================================================================
+  // TEMPORARY FILE MONITORING CODE - DO NOT PUSH TO REMOTE!
+  // Tracking mysterious index.js corruption during LLM calls
+  // ============================================================================
+  const fs = require('fs');
+  const path = require('path');
+  const monitoredFile = path.join(config.workspace.root, 'index.js');
+  const EXPECTED_SIZE = 52; // Hard-coded expected size of index.js
+  let indexJsSizeBefore = null;
+
+  try {
+    if (fs.existsSync(monitoredFile)) {
+      const statsBefore = fs.statSync(monitoredFile);
+      indexJsSizeBefore = statsBefore.size;
+
+      // Write directly to audit log
+      if (auditLogger.enabled) {
+        const auditFs = require('fs');
+        const auditLogPath = path.resolve(config.audit.logFile);
+        const logEntry = JSON.stringify({
+          level: "info",
+          time: new Date().toISOString(),
+          type: "file_monitor",
+          sessionId: session?.id ?? null,
+          file: 'index.js',
+          sizeBefore: indexJsSizeBefore,
+          expectedSize: EXPECTED_SIZE,
+          sizeOk: indexJsSizeBefore === EXPECTED_SIZE,
+          msg: "FILE MONITOR: index.js BEFORE LLM call"
+        }) + '\n';
+        auditFs.appendFileSync(auditLogPath, logEntry);
+      }
+    }
+  } catch (err) {
+    logger.warn({ error: err.message }, "Failed to stat index.js for monitoring");
+  }
+
   const databricksResponse = await invokeModel(cleanPayload);
+
+  // FILE MONITORING: Check if index.js size changed after LLM call
+  try {
+    if (indexJsSizeBefore !== null && fs.existsSync(monitoredFile)) {
+      const statsAfter = fs.statSync(monitoredFile);
+      const indexJsSizeAfter = statsAfter.size;
+
+      if (indexJsSizeBefore !== indexJsSizeAfter) {
+        // SIZE CHANGED! Read content to see what happened
+        const contentAfter = fs.readFileSync(monitoredFile, 'utf8');
+
+        // Write to audit log
+        if (auditLogger.enabled) {
+          const auditFs = require('fs');
+          const auditLogPath = path.resolve(config.audit.logFile);
+          const logEntry = JSON.stringify({
+            level: "error",
+            time: new Date().toISOString(),
+            type: "file_monitor",
+            sessionId: session?.id ?? null,
+            file: 'index.js',
+            sizeBefore: indexJsSizeBefore,
+            sizeAfter: indexJsSizeAfter,
+            expectedSize: EXPECTED_SIZE,
+            contentAfter: contentAfter,
+            msg: "FILE MONITOR: index.js SIZE CHANGED DURING LLM CALL!"
+          }) + '\n';
+          auditFs.appendFileSync(auditLogPath, logEntry);
+        }
+      } else {
+        // Size unchanged
+        if (auditLogger.enabled) {
+          const auditFs = require('fs');
+          const auditLogPath = path.resolve(config.audit.logFile);
+          const logEntry = JSON.stringify({
+            level: "info",
+            time: new Date().toISOString(),
+            type: "file_monitor",
+            sessionId: session?.id ?? null,
+            file: 'index.js',
+            size: indexJsSizeAfter,
+            msg: "FILE MONITOR: index.js size unchanged after LLM call"
+          }) + '\n';
+          auditFs.appendFileSync(auditLogPath, logEntry);
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ error: err.message }, "Failed to check index.js after LLM call");
+  }
+  // ============================================================================
 
   // Extract and log actual token usage
   const actualUsage = databricksResponse.ok && config.tokenTracking?.enabled !== false
@@ -1681,6 +1818,18 @@ async function runAgentLoop({
     }
   }
 
+    // AUDIT: Confirm we reached post-response processing
+    auditLog("=== POST-RESPONSE PROCESSING START ===", {
+      sessionId: session?.id ?? null,
+      providerType,
+      hasStream: databricksResponse.stream !== undefined,
+      streamValue: databricksResponse.stream ? "truthy" : "falsy",
+      hasJson: !!databricksResponse.json,
+      ok: databricksResponse.ok,
+      status: databricksResponse.status,
+      hasMessage: !!databricksResponse.json?.message
+    });
+
     // DIAGNOSTIC: Log response structure to identify early return cause
     logger.info({
       sessionId: session?.id ?? null,
@@ -1697,6 +1846,10 @@ async function runAgentLoop({
 
     // Handle streaming responses (pass through without buffering)
     if (databricksResponse.stream) {
+      auditLog("=== STREAMING RESPONSE - BYPASSING TOOL EXTRACTION ===", {
+        sessionId: session?.id ?? null,
+        status: databricksResponse.status
+      });
       logger.debug(
         {
           sessionId: session?.id ?? null,
@@ -1850,6 +2003,15 @@ async function runAgentLoop({
       message = databricksResponse.json?.message ?? {};
       toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
+      auditLog("=== OLLAMA TOOL EXTRACTION ===", {
+        sessionId: session?.id ?? null,
+        hasMessage: !!databricksResponse.json?.message,
+        hasToolCalls: toolCalls.length > 0,
+        toolCallCount: toolCalls.length,
+        toolNames: toolCalls.map(tc => tc.function?.name),
+        done: databricksResponse.json?.done
+      });
+
       logger.info({
         hasMessage: !!databricksResponse.json?.message,
         hasToolCalls: toolCalls.length > 0,
@@ -1937,6 +2099,13 @@ async function runAgentLoop({
         };
       })
     }, "=== FINAL TOOL CALLS AFTER EXTRACTION ===");
+
+    auditLog("=== CHECKING TOOL CALLS COUNT ===", {
+      sessionId: session?.id ?? null,
+      toolCallsCount: toolCalls.length,
+      willExecuteTools: toolCalls.length > 0,
+      willSkipToResponse: toolCalls.length === 0
+    });
 
     if (toolCalls.length > 0) {
       // Convert OpenAI/OpenRouter format to Anthropic format for session storage
@@ -2036,6 +2205,27 @@ async function runAgentLoop({
       // Check if tool execution should happen on client side
       const executionMode = config.toolExecutionMode || "server";
 
+      // Save tool_use blocks for final response when doing server-side execution
+      if (executionMode === "server" && sessionContent && Array.isArray(sessionContent)) {
+        // Only save tool_use blocks (not text blocks)
+        const toolUseBlocks = sessionContent.filter(block => block.type === "tool_use");
+        accumulatedContentBlocks.push(...toolUseBlocks);
+        auditLog("=== SAVED TOOL_USE BLOCKS FOR FINAL RESPONSE ===", {
+          sessionId: session?.id ?? null,
+          toolUseBlockCount: toolUseBlocks.length,
+          totalAccumulated: accumulatedContentBlocks.length
+        });
+      }
+
+      auditLog("=== TOOL HANDLING STARTED ===", {
+        sessionId: session?.id ?? null,
+        toolCallCount: toolCalls.length,
+        executionMode,
+        providerType,
+        configExecutionMode: config.toolExecutionMode,
+        toolNames: toolCalls.map(tc => tc.function?.name ?? tc.name)
+      });
+
       logger.info({
         toolCallCount: toolCalls.length,
         executionMode,
@@ -2091,6 +2281,17 @@ async function runAgentLoop({
       }
 
       // Log categorization results
+      auditLog("=== TOOL CATEGORIZATION ===", {
+        sessionId: session?.id ?? null,
+        providerType,
+        executionMode,
+        totalToolCalls: toolCalls.length,
+        serverSideCount: serverSideToolCalls.length,
+        clientSideCount: clientSideToolCalls.length,
+        serverSideToolNames: serverSideToolCalls.map(c => c.function?.name ?? c.name),
+        clientSideToolNames: clientSideToolCalls.map(c => c.function?.name ?? c.name)
+      });
+
       logger.info({
         providerType,
         executionMode,
@@ -2104,6 +2305,16 @@ async function runAgentLoop({
       // If in passthrough/client mode and there are client-side tools, return them to client
       // Server-side tools (Task, Web) will be executed below
       if ((executionMode === "passthrough" || executionMode === "client") && clientSideToolCalls.length > 0) {
+        auditLog("=== HYBRID MODE: RETURNING CLIENT-SIDE TOOLS ===", {
+          sessionId: session?.id ?? null,
+          totalToolCount: toolCalls.length,
+          serverToolCount: serverSideToolCalls.length,
+          clientToolCount: clientSideToolCalls.length,
+          executionMode,
+          clientTools: clientSideToolCalls.map((c) => c.function?.name ?? c.name),
+          serverTools: serverSideToolCalls.map((c) => c.function?.name ?? c.name)
+        });
+
         logger.info(
           {
             sessionId: session?.id ?? null,
@@ -2183,6 +2394,13 @@ async function runAgentLoop({
           "All tools are server-side tools - executing server-side"
         );
       }
+
+      auditLog("=== SERVER-SIDE TOOL EXECUTION STARTING ===", {
+        sessionId: session?.id ?? null,
+        toolCount: toolCalls.length,
+        executionMode,
+        toolNames: toolCalls.map(c => c.function?.name ?? c.name)
+      });
 
       logger.debug(
         {
@@ -2700,6 +2918,13 @@ async function runAgentLoop({
       continue;
     }
 
+    // This runs when toolCalls.length === 0 (skipped tool execution)
+    auditLog("=== SKIPPED TOOL EXECUTION - BUILDING FINAL RESPONSE ===", {
+      sessionId: session?.id ?? null,
+      providerType,
+      hasResponse: !!databricksResponse.json
+    });
+
     let anthropicPayload;
     // Use actualProvider from invokeModel for hybrid routing support
     const actualProvider = databricksResponse.actualProvider || providerType;
@@ -2722,6 +2947,15 @@ async function runAgentLoop({
         requestedModel,
       );
       anthropicPayload.content = policy.sanitiseContent(anthropicPayload.content);
+
+      auditLog("=== OLLAMA RESPONSE CONVERTED TO ANTHROPIC FORMAT ===", {
+        sessionId: session?.id ?? null,
+        providerType: actualProvider,
+        hasPayload: !!anthropicPayload,
+        contentType: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? 'array' : typeof anthropicPayload.content) : null,
+        contentLength: anthropicPayload?.content?.length || 0,
+        stopReason: anthropicPayload?.stop_reason
+      });
     } else if (actualProvider === "openrouter") {
       const { convertOpenRouterResponseToAnthropic } = require("../clients/openrouter-utils");
 
@@ -2935,6 +3169,24 @@ async function runAgentLoop({
     const fallbackCandidate = content.find(
       (item) => item.type === "text" && needsWebFallback(item.text),
     );
+
+    auditLog("=== CHECKING WEB FALLBACK ===", {
+      sessionId: session?.id ?? null,
+      hasFallbackCandidate: !!fallbackCandidate,
+      fallbackPerformed,
+      willTriggerFallback: !!(fallbackCandidate && !fallbackPerformed)
+    });
+
+    // Prepend accumulated tool_use blocks to final response (for server-side execution)
+    if (accumulatedContentBlocks.length > 0 && Array.isArray(anthropicPayload.content)) {
+      anthropicPayload.content = [...accumulatedContentBlocks, ...anthropicPayload.content];
+      auditLog("=== PREPENDED TOOL_USE BLOCKS TO FINAL RESPONSE ===", {
+        sessionId: session?.id ?? null,
+        toolUseBlockCount: accumulatedContentBlocks.length,
+        finalContentLength: anthropicPayload.content.length,
+        contentTypes: anthropicPayload.content.map(b => b.type)
+      });
+    }
 
     if (fallbackCandidate && !fallbackPerformed) {
       if (providerType === "azure-anthropic") {
