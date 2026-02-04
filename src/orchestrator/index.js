@@ -3257,6 +3257,18 @@ async function runAgentLoop({
       },
       "Agent loop completed successfully",
     );
+
+    // DIAGNOSTIC: Log response being returned
+    logger.info({
+      sessionId: session?.id ?? null,
+      status: 200,
+      hasBody: !!anthropicPayload,
+      bodyKeys: anthropicPayload ? Object.keys(anthropicPayload) : [],
+      contentType: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? 'array' : typeof anthropicPayload.content) : 'none',
+      contentLength: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? anthropicPayload.content.length : String(anthropicPayload.content).length) : 0,
+      stopReason: anthropicPayload?.stop_reason
+    }, "=== RETURNING RESPONSE TO CLIENT ===");
+
     return {
       response: {
         status: 200,

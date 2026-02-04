@@ -6,6 +6,7 @@ const { createRateLimiter } = require("./middleware/rate-limiter");
 const openaiRouter = require("./openai-router");
 const providersRouter = require("./providers-handler");
 const { getRoutingHeaders, getRoutingStats, analyzeComplexity } = require("../routing");
+const logger = require("../logger");
 
 const router = express.Router();
 
@@ -447,6 +448,15 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
         }
       });
     }
+
+    // DIAGNOSTIC: Log response being sent to client
+    logger.info({
+      status: result.status,
+      hasBody: !!result.body,
+      bodyKeys: result.body ? Object.keys(result.body) : [],
+      bodyType: typeof result.body,
+      contentLength: result.body ? JSON.stringify(result.body).length : 0
+    }, "=== SENDING RESPONSE TO CLIENT ===");
 
     metrics.recordResponse(result.status);
     res.status(result.status).send(result.body);
