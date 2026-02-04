@@ -2786,6 +2786,16 @@ async function runAgentLoop({
 
         // Accumulate tool results for CLI display
         // Build a standardized tool_result block in Anthropic format
+        logger.info({
+          sessionId: session?.id ?? null,
+          callId: call.id,
+          executionId: execution.id,
+          toolName: call.function?.name ?? call.name ?? execution.name,
+          executionOk: execution.ok,
+          contentType: typeof execution.content,
+          accumulatedCountBefore: accumulatedToolResults.length
+        }, "=== ACCUMULATING TOOL RESULT FOR CLI - START ===");
+
         const toolUseId = call.id ?? execution.id;
         const toolResultContent = typeof execution.content === "string"
           ? execution.content
@@ -2797,6 +2807,15 @@ async function runAgentLoop({
           content: toolResultContent,
           is_error: execution.ok === false,
         });
+
+        logger.info({
+          sessionId: session?.id ?? null,
+          toolUseId,
+          toolName: call.function?.name ?? call.name ?? execution.name,
+          contentLength: toolResultContent.length,
+          contentPreview: toolResultContent.substring(0, 200),
+          accumulatedCountAfter: accumulatedToolResults.length
+        }, "=== ACCUMULATING TOOL RESULT FOR CLI - END ===");
 
         if (execution.ok) {
           logger.debug(
@@ -3534,22 +3553,69 @@ async function runAgentLoop({
 
     // Include accumulated tool results in the response for CLI display
     // This ensures the client sees actual tool output, not just LLM summaries
+    logger.info({
+      sessionId: session?.id ?? null,
+      accumulatedToolResultsCount: accumulatedToolResults.length,
+      hasAnthropicPayload: !!anthropicPayload,
+      currentContentType: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? 'array' : typeof anthropicPayload.content) : 'none',
+      currentContentLength: anthropicPayload?.content?.length || 0
+    }, "=== BEFORE TOOL RESULTS INCLUSION CHECK ===");
+
     if (accumulatedToolResults.length > 0) {
+      logger.info({
+        sessionId: session?.id ?? null,
+        toolResultCount: accumulatedToolResults.length,
+        toolNames: accumulatedToolResults.map(r => r.tool_name),
+        toolUseIds: accumulatedToolResults.map(r => r.tool_use_id)
+      }, "=== ENTERING TOOL RESULTS INCLUSION BLOCK ===");
+
       // Ensure content is an array
       if (!Array.isArray(anthropicPayload.content)) {
+        logger.info({
+          sessionId: session?.id ?? null,
+          originalContentType: typeof anthropicPayload.content,
+          originalContentValue: anthropicPayload.content ? String(anthropicPayload.content).substring(0, 100) : 'null'
+        }, "=== CONTENT NOT ARRAY - CONVERTING ===");
+
         anthropicPayload.content = anthropicPayload.content
           ? [{ type: "text", text: String(anthropicPayload.content) }]
           : [];
+
+        logger.info({
+          sessionId: session?.id ?? null,
+          convertedContentLength: anthropicPayload.content.length
+        }, "=== CONTENT CONVERTED TO ARRAY ===");
+      } else {
+        logger.info({
+          sessionId: session?.id ?? null,
+          existingContentLength: anthropicPayload.content.length,
+          existingContentTypes: anthropicPayload.content.map(b => b.type)
+        }, "=== CONTENT ALREADY ARRAY ===");
       }
+
       // Prepend tool results before text content so they appear in order
+      const contentBeforePrepend = anthropicPayload.content.length;
       anthropicPayload.content = [...accumulatedToolResults, ...anthropicPayload.content];
 
       logger.info({
         sessionId: session?.id ?? null,
         toolResultCount: accumulatedToolResults.length,
         toolNames: accumulatedToolResults.map(r => r.tool_name),
-      }, "Including tool results in response for CLI display");
+        contentBeforePrepend,
+        contentAfterPrepend: anthropicPayload.content.length,
+        finalContentTypes: anthropicPayload.content.map(b => b.type)
+      }, "=== TOOL RESULTS PREPENDED TO RESPONSE ===");
+    } else {
+      logger.info({
+        sessionId: session?.id ?? null
+      }, "=== NO TOOL RESULTS TO INCLUDE (accumulatedToolResults empty) ===");
     }
+
+    logger.info({
+      sessionId: session?.id ?? null,
+      finalContentLength: anthropicPayload?.content?.length || 0,
+      finalContentTypes: anthropicPayload?.content?.map(b => b.type) || []
+    }, "=== AFTER TOOL RESULTS INCLUSION CHECK ===");
 
     // DIAGNOSTIC: Log response being returned
     logger.info({

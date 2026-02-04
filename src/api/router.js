@@ -436,6 +436,15 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
           res.write(`event: content_block_stop\n`);
           res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
         } else if (block.type === "tool_result") {
+          // === TOOL_RESULT SSE STREAMING - ENTERED ===
+          logger.info({
+            blockIndex: i,
+            blockType: block.type,
+            toolUseId: block.tool_use_id,
+            contentType: typeof block.content,
+            contentLength: typeof block.content === 'string' ? block.content.length : JSON.stringify(block.content).length
+          }, "=== SSE: STREAMING TOOL_RESULT BLOCK - START ===");
+
           // Stream tool_result blocks so CLI can display actual tool output
           res.write(`event: content_block_start\n`);
           res.write(`data: ${JSON.stringify({
@@ -449,6 +458,12 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
             ? block.content
             : JSON.stringify(block.content);
 
+          logger.info({
+            blockIndex: i,
+            contentLength: content.length,
+            contentPreview: content.substring(0, 200)
+          }, "=== SSE: STREAMING TOOL_RESULT CONTENT ===");
+
           res.write(`event: content_block_delta\n`);
           res.write(`data: ${JSON.stringify({
             type: "content_block_delta",
@@ -458,6 +473,12 @@ router.post("/v1/messages", rateLimiter, async (req, res, next) => {
 
           res.write(`event: content_block_stop\n`);
           res.write(`data: ${JSON.stringify({ type: "content_block_stop", index: i })}\n\n`);
+
+          // === TOOL_RESULT SSE STREAMING - COMPLETED ===
+          logger.info({
+            blockIndex: i,
+            toolUseId: block.tool_use_id
+          }, "=== SSE: STREAMING TOOL_RESULT BLOCK - END ===");
         }
       }
 
