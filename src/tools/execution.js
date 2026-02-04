@@ -2,6 +2,7 @@ const path = require("path");
 const { runProcess, MAX_TIMEOUT_MS, DEFAULT_TIMEOUT_MS } = require("./process");
 const { registerTool } = require(".");
 const { workspaceRoot, resolveWorkspacePath } = require("../workspace");
+const logger = require("../logger");
 
 function parseTimeout(value) {
   if (value === undefined || value === null) return DEFAULT_TIMEOUT_MS;
@@ -74,6 +75,14 @@ function registerShellTool() {
 
       const sandbox = parseSandboxMode(args.sandbox ?? args.isolation);
 
+      logger.info({
+        tool: "shell",
+        command: typeof command === "string" ? command.substring(0, 100) : command,
+        cwd,
+        sandbox,
+        timeoutMs
+      }, "Shell tool invoked");
+
       const result = await runProcess({
         command: spawnCommand,
         args: spawnArgs,
@@ -87,6 +96,14 @@ function registerShellTool() {
 
       const ok = result.exitCode === 0 && !result.timedOut;
       const status = result.timedOut ? 408 : ok ? 200 : 500;
+
+      logger.info({
+        tool: "shell",
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        durationMs: result.durationMs,
+        status
+      }, "Shell tool completed");
 
       return {
         ok,
@@ -128,6 +145,15 @@ function registerPythonTool() {
       // Basic support: write code to stdin; requirements handling is TODO.
       const sandbox = parseSandboxMode(args.sandbox ?? args.isolation);
 
+      logger.info({
+        tool: "python_exec",
+        executable,
+        codeLength: code.length,
+        cwd,
+        sandbox,
+        timeoutMs
+      }, "Python tool invoked");
+
       const result = await runProcess({
         command: executable,
         args: ["-"],
@@ -141,6 +167,14 @@ function registerPythonTool() {
 
       const ok = result.exitCode === 0 && !result.timedOut;
       const status = result.timedOut ? 408 : ok ? 200 : 500;
+
+      logger.info({
+        tool: "python_exec",
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        durationMs: result.durationMs,
+        status
+      }, "Python tool completed");
 
       return {
         ok,

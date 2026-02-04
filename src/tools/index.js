@@ -190,6 +190,10 @@ async function executeToolCall(call, context = {}) {
     }
   }
   if (!registered) {
+    logger.warn({
+      tool: normalisedCall.name,
+      id: normalisedCall.id
+    }, "Tool not registered");
     const content = coerceString({
       error: "tool_not_registered",
       tool: normalisedCall.name,
@@ -206,6 +210,21 @@ async function executeToolCall(call, context = {}) {
     };
   }
 
+  // Log tool invocation with arguments (at debug level to avoid noise)
+  logger.debug({
+    tool: normalisedCall.name,
+    id: normalisedCall.id,
+    args: normalisedCall.arguments
+  }, "Tool invocation started");
+
+  // Log at info level without arguments
+  logger.info({
+    tool: normalisedCall.name,
+    id: normalisedCall.id
+  }, "Executing tool");
+
+  const startTime = Date.now();
+
   try {
     const result = await registered.handler(
       {
@@ -221,6 +240,18 @@ async function executeToolCall(call, context = {}) {
     // Apply tool output truncation for token efficiency
     const truncatedContent = truncateToolOutput(normalisedCall.name, formatted.content);
 
+    const durationMs = Date.now() - startTime;
+
+    // Log successful execution
+    logger.info({
+      tool: normalisedCall.name,
+      id: normalisedCall.id,
+      status: formatted.status,
+      durationMs,
+      outputLength: truncatedContent?.length || 0,
+      truncated: truncatedContent !== formatted.content
+    }, "Tool execution completed");
+
     return {
       id: normalisedCall.id,
       name: normalisedCall.name,
@@ -232,11 +263,20 @@ async function executeToolCall(call, context = {}) {
         registered: true,
         truncated: truncatedContent !== formatted.content,
         originalLength: formatted.content?.length,
-        truncatedLength: truncatedContent?.length
+        truncatedLength: truncatedContent?.length,
+        durationMs
       },
     };
   } catch (err) {
-    logger.error({ err, tool: normalisedCall.name }, "Tool execution failed");
+    const durationMs = Date.now() - startTime;
+
+    logger.error({
+      err,
+      tool: normalisedCall.name,
+      id: normalisedCall.id,
+      durationMs
+    }, "Tool execution failed");
+
     return {
       id: normalisedCall.id,
       name: normalisedCall.name,
@@ -251,6 +291,7 @@ async function executeToolCall(call, context = {}) {
       metadata: {
         registered: true,
         error: true,
+        durationMs
       },
       error: err,
     };

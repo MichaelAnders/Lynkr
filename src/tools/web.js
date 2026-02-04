@@ -266,6 +266,8 @@ function registerWebSearchTool() {
       const limit = resolveLimit(args);
       const timeoutMs = config.webSearch.timeoutMs;
 
+      logger.info({ tool: "web_search", query, limit }, "Web search tool invoked");
+
       try {
         const payload = await performSearch({ query, limit, timeoutMs });
         const formatted = formatSearchResponse(payload, { query, limit });
@@ -331,6 +333,8 @@ function registerWebFetchTool() {
       const url = parseUrl(rawUrl.trim());
       const allowedHosts = buildAllowedFetchHosts();
       ensureHostAllowed(url, allowedHosts);
+
+      logger.info({ tool: "web_fetch", url: url.toString() }, "Web fetch tool invoked");
 
       const timeoutMs = config.webSearch.timeoutMs;
       try {
