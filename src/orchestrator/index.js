@@ -2003,12 +2003,43 @@ async function runAgentLoop({
       // Check if tool execution should happen on client side
       const executionMode = config.toolExecutionMode || "server";
 
-      // IMPORTANT: Task tools (subagents) and Web Search tools ALWAYS execute server-side, regardless of execution mode to ensure reliability
-      // Separate Server-side tools from Client-side tools
+      // IMPORTANT: Task tools (subagents) and Web Search tools ALWAYS execute server-side
+      // For Ollama: ALL file/shell tools MUST execute server-side to handle object-format arguments
       const serverSideToolCalls = [];
       const clientSideToolCalls = [];
 
-      const SERVER_SIDE_TOOLS = new Set(["task", "web_search", "web_fetch", "websearch", "webfetch"]);
+      let SERVER_SIDE_TOOLS;
+      if (providerType === "ollama") {
+        // Ollama requires server-side execution for proper argument handling (object vs JSON string)
+        SERVER_SIDE_TOOLS = new Set([
+          // Subagents and web tools
+          "task",
+          "web_search", "websearch",
+          "web_fetch", "webfetch",
+          // File operations - MUST be server-side for Ollama object argument format
+          "read", "fs_read",
+          "write", "fs_write", "filewrite",
+          "edit", "edit_patch", "patch",
+          // Shell operations
+          "bash", "shell", "sh", "terminal",
+          // File search
+          "glob", "workspace_list", "list", "ls", "dir",
+          "grep", "workspace_search", "search", "find",
+        ]);
+        logger.info({
+          providerType,
+          serverSideToolCount: SERVER_SIDE_TOOLS.size,
+          serverSideTools: Array.from(SERVER_SIDE_TOOLS)
+        }, "Ollama provider: expanded SERVER_SIDE_TOOLS to include file/shell operations");
+      } else {
+        // Other providers: only Task and Web tools execute server-side
+        SERVER_SIDE_TOOLS = new Set(["task", "web_search", "web_fetch", "websearch", "webfetch"]);
+        logger.debug({
+          providerType,
+          serverSideToolCount: SERVER_SIDE_TOOLS.size,
+          serverSideTools: Array.from(SERVER_SIDE_TOOLS)
+        }, "Non-Ollama provider: using default SERVER_SIDE_TOOLS");
+      }
 
       for (const call of toolCalls) {
         const toolName = (call.function?.name ?? call.name ?? "").toLowerCase();
@@ -2018,6 +2049,17 @@ async function runAgentLoop({
           clientSideToolCalls.push(call);
         }
       }
+
+      // Log categorization results
+      logger.info({
+        providerType,
+        executionMode,
+        totalToolCalls: toolCalls.length,
+        serverSideCount: serverSideToolCalls.length,
+        clientSideCount: clientSideToolCalls.length,
+        serverSideToolNames: serverSideToolCalls.map(c => c.function?.name ?? c.name),
+        clientSideToolNames: clientSideToolCalls.map(c => c.function?.name ?? c.name)
+      }, "=== TOOL CATEGORIZATION ===");
 
       // If in passthrough/client mode and there are client-side tools, return them to client
       // Server-side tools (Task, Web) will be executed below
