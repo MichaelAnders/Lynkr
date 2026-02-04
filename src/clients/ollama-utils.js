@@ -14,6 +14,7 @@ const TOOL_CAPABLE_MODELS = new Set([
   "mistral",
   "mistral-nemo",
   "firefunction-v2",
+  "gpt-oss"
 ]);
 
 /**

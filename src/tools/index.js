@@ -113,24 +113,65 @@ function normalizeHandlerResult(result) {
   return { ok, status, content, metadata };
 }
 
-function parseArguments(call) {
+function parseArguments(call, providerType = null) {
   const raw = call?.function?.arguments;
-  if (typeof raw !== "string" || raw.trim().length === 0) return {};
+
+  // DEBUG: Log full call structure for diagnosis
+  logger.info({
+    providerType,
+    fullCall: JSON.stringify(call),
+    hasFunction: !!call?.function,
+    functionKeys: call?.function ? Object.keys(call.function) : [],
+    argumentsType: typeof raw,
+    argumentsValue: raw,
+    argumentsIsNull: raw === null,
+    argumentsIsUndefined: raw === undefined,
+  }, "=== PARSING TOOL ARGUMENTS ===");
+
+  // Ollama sends arguments as an object, OpenAI as a JSON string
+  if (typeof raw === "object" && raw !== null) {
+    if (providerType !== "ollama") {
+      logger.warn({
+        providerType,
+        expectedProvider: "ollama",
+        argumentsType: typeof raw,
+        arguments: raw
+      }, `Received object arguments but provider is ${providerType || "unknown"}, expected ollama format. Continuing with object.`);
+    } else {
+      logger.info({
+        type: "object",
+        arguments: raw
+      }, "Tool arguments already parsed (Ollama format)");
+    }
+    return raw;
+  }
+
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    logger.warn({
+      argumentsType: typeof raw,
+      argumentsEmpty: !raw || raw.trim().length === 0,
+      providerType
+    }, "Arguments not a string or empty - returning {}");
+    return {};
+  }
+
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    logger.info({ parsed }, "Parsed JSON string arguments");
+    return parsed;
   } catch (err) {
-    logger.warn({ err }, "Failed to parse tool arguments");
+    logger.warn({ err, raw }, "Failed to parse tool arguments");
     return {};
   }
 }
 
-function normaliseToolCall(call) {
+function normaliseToolCall(call, providerType = null) {
   const name = call?.function?.name ?? call?.name;
   const id = call?.id ?? `${name ?? "tool"}_${Date.now()}`;
   return {
     id,
     name,
-    arguments: parseArguments(call),
+    arguments: parseArguments(call, providerType),
     raw: call,
   };
 }
@@ -171,7 +212,8 @@ function listTools() {
 }
 
 async function executeToolCall(call, context = {}) {
-  const normalisedCall = normaliseToolCall(call);
+  const providerType = context?.providerType || context?.provider || null;
+  const normalisedCall = normaliseToolCall(call, providerType);
   let registered = registry.get(normalisedCall.name);
   if (!registered) {
     const aliasTarget = TOOL_ALIASES[normalisedCall.name.toLowerCase()];
@@ -210,18 +252,14 @@ async function executeToolCall(call, context = {}) {
     };
   }
 
-  // Log tool invocation with arguments (at debug level to avoid noise)
-  logger.debug({
-    tool: normalisedCall.name,
-    id: normalisedCall.id,
-    args: normalisedCall.arguments
-  }, "Tool invocation started");
-
-  // Log at info level without arguments
+  // Log tool invocation with full details for debugging
   logger.info({
     tool: normalisedCall.name,
-    id: normalisedCall.id
-  }, "Executing tool");
+    id: normalisedCall.id,
+    args: normalisedCall.arguments,
+    argsKeys: Object.keys(normalisedCall.arguments || {}),
+    rawCall: JSON.stringify(normalisedCall.raw)
+  }, "=== EXECUTING TOOL ===");
 
   const startTime = Date.now();
 

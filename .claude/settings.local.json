@@ -27,7 +27,10 @@
       "Bash(jobs:*)",
       "Bash(gh pr view:*)",
       "Bash(gh run list:*)",
-      "Bash(gh run view:*)"
+      "Bash(gh run view:*)",
+      "Bash(node scripts/audit-log-reader.js:*)",
+      "Bash(grep:*)",
+      "WebFetch(domain:ollama.com)"
     ],
     "deny": [],
     "ask": []

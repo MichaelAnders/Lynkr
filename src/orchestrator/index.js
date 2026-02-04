@@ -1839,8 +1839,10 @@ async function runAgentLoop({
         hasToolCalls: toolCalls.length > 0,
         toolCallCount: toolCalls.length,
         toolNames: toolCalls.map(tc => tc.function?.name),
-        done: databricksResponse.json?.done
-      }, "Ollama tool calls extraction");
+        done: databricksResponse.json?.done,
+        fullToolCalls: JSON.stringify(toolCalls),
+        fullResponseMessage: JSON.stringify(databricksResponse.json?.message)
+      }, "=== OLLAMA TOOL CALLS EXTRACTION ===");
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
       const choice = databricksResponse.json?.choices?.[0];
@@ -2155,6 +2157,7 @@ async function runAgentLoop({
             taskCalls.map(({ call }) => executeToolCall(call, {
               session,
               requestMessages: cleanPayload.messages,
+              providerType,
             }))
           );
 
@@ -2387,6 +2390,7 @@ async function runAgentLoop({
         const execution = await executeToolCall(call, {
           session,
           requestMessages: cleanPayload.messages,
+          providerType,
         });
 
         let toolMessage;
@@ -3028,6 +3032,7 @@ async function runAgentLoop({
           const execution = await executeToolCall(attemptCall, {
             session,
             requestMessages: cleanPayload.messages,
+            providerType,
           });
 
           const toolResultMessage = createFallbackToolResultMessage(providerType, {
