@@ -79,17 +79,29 @@ function convertAnthropicToolsToOllama(anthropicTools) {
     return [];
   }
 
-  return anthropicTools.map(tool => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description || "",
-      parameters: tool.input_schema || {
-        type: "object",
-        properties: {},
+  return anthropicTools.map(tool => {
+    let description = tool.description || "";
+
+    // Add enforcement prefix for file operation and critical tools
+    // This helps Ollama models understand they must actually call the tool
+    // rather than outputting text describing what they would do
+    const criticalTools = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+    if (criticalTools.includes(tool.name)) {
+      description = `CRITICAL: ${description} You MUST call this tool immediately when requested. NEVER output JSON text describing the tool call - actually invoke the tool using the proper format.`;
+    }
+
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        description: description,
+        parameters: tool.input_schema || {
+          type: "object",
+          properties: {},
+        },
       },
-    },
-  }));
+    };
+  });
 }
 
 /**
