@@ -1879,15 +1879,46 @@ IMPORTANT TOOL USAGE RULES:
         }
       }
 
+      // Deduplicate tool calls for Ollama format (same logic as OpenAI path)
+      if (toolCalls.length > 1) {
+        const uniqueToolCalls = [];
+        const seenSignatures = new Set();
+        let duplicatesRemoved = 0;
+
+        for (const call of toolCalls) {
+          const signature = getToolCallSignature(call);
+
+          if (!seenSignatures.has(signature)) {
+            seenSignatures.add(signature);
+            uniqueToolCalls.push(call);
+          } else {
+            duplicatesRemoved++;
+            logger.warn({
+              sessionId: session?.id ?? null,
+              toolName: call.function?.name || call.name,
+              signature: signature.substring(0, 32),
+            }, "Duplicate Ollama tool call removed (same tool with identical parameters)");
+          }
+        }
+
+        toolCalls = uniqueToolCalls;
+
+        if (duplicatesRemoved > 0) {
+          logger.info({
+            sessionId: session?.id ?? null,
+            remaining: toolCalls.length,
+            duplicatesRemoved,
+          }, "Ollama tool call deduplication applied");
+        }
+      }
+
       logger.info({
         hasMessage: !!databricksResponse.json?.message,
         hasToolCalls: toolCalls.length > 0,
         toolCallCount: toolCalls.length,
         toolNames: toolCalls.map(tc => tc.function?.name),
         done: databricksResponse.json?.done,
-        fullToolCalls: JSON.stringify(toolCalls),
-        fullResponseMessage: JSON.stringify(databricksResponse.json?.message)
-      }, "=== OLLAMA TOOL CALLS EXTRACTION ===");
+      }, "Ollama tool calls extraction");
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
       const choice = databricksResponse.json?.choices?.[0];
