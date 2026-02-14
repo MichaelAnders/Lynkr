@@ -1,4 +1,6 @@
 const pino = require("pino");
+const fs = require("fs");
+const path = require("path");
 const config = require("../config");
 const { createOversizedErrorStream } = require("./oversized-error-stream");
 
@@ -63,6 +65,19 @@ streams.push({
 				})
 			: process.stdout,
 });
+
+// File output stream (LOG_FILE env var, e.g. ./logs/lynkr.log)
+const logFile = process.env.LOG_FILE;
+if (logFile) {
+	const logDir = path.dirname(logFile);
+	if (!fs.existsSync(logDir)) {
+		fs.mkdirSync(logDir, { recursive: true });
+	}
+	streams.push({
+		level: config.logger.level,
+		stream: pino.destination({ dest: logFile, sync: false }),
+	});
+}
 
 // Oversized error stream (if enabled)
 if (config.oversizedErrorLogging?.enabled) {

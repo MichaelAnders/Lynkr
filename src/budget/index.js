@@ -16,8 +16,8 @@ class BudgetManager {
       return;
     }
 
+    const dbPath = path.join(process.cwd(), 'data', 'budgets.db');
     try {
-      const dbPath = path.join(process.cwd(), 'data', 'budgets.db');
       const dbDir = path.dirname(dbPath);
 
       if (!fs.existsSync(dbDir)) {

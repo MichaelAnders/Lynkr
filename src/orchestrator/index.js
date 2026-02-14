@@ -994,7 +994,7 @@ function sanitizePayload(payload) {
         return false; // NOT conversational - needs tools!
       }
 
-      if (trimmed.length < 20 && !/code|file|function|error|bug|fix|write|read|create/.test(trimmed)) {
+      if (trimmed.length < 20 && !/code|file|function|error|bug|fix|write|read|create|debug|check|run|git|access|command|shell|terminal|install|build|test|deploy/.test(trimmed)) {
         logger.warn({ matched: "short", trimmed, length: trimmed.length }, "Ollama conversational check - SHORT MESSAGE matched, DELETING TOOLS");
         return true;
       }
@@ -1005,16 +1005,14 @@ function sanitizePayload(payload) {
 
     if (isConversational) {
       // Strip all tools for simple conversational messages
-      const originalToolCount = Array.isArray(clean.tools) ? clean.tools.length : 0;
       delete clean.tools;
       delete clean.tool_choice;
       clean._noToolInjection = true;
       logger.warn({
         model: config.ollama?.model,
-        message: "Removed tools for conversational message",
-        originalToolCount,
-        userMessage: clean.messages?.[clean.messages.length - 1]?.content?.substring(0, 50),
-      }, "Ollama conversational mode - ALL TOOLS DELETED!");    } else if (modelSupportsTools && Array.isArray(clean.tools) && clean.tools.length > 0) {
+        message: "Removed tools for conversational message"
+      }, "Ollama conversational mode");
+    } else if (modelSupportsTools && Array.isArray(clean.tools) && clean.tools.length > 0) {
       // Ollama performance degrades with too many tools
       // Limit to essential tools only
       const OLLAMA_ESSENTIAL_TOOLS = new Set([
@@ -1211,28 +1209,6 @@ function sanitizePayload(payload) {
     toolCount: clean.tools?.length ?? 0
   }, '[CONTEXT_FLOW] After sanitizePayload');
 
-  // === Suggestion mode: tag request and override model if configured ===
-  const { isSuggestionMode: isSuggestion } = detectSuggestionMode(clean.messages);
-  clean._requestMode = isSuggestion ? "suggestion" : "main";
-  const smConfig = config.modelProvider?.suggestionModeModel ?? "default";
-  if (isSuggestion && smConfig.toLowerCase() !== "default" && smConfig.toLowerCase() !== "none") {
-    clean.model = smConfig;
-    clean._suggestionModeModel = smConfig;
-  }
-
-  // === Topic detection: tag request and override model if configured ===
-  if (clean._requestMode === "main") {
-    const { isTopicDetection: isTopic } = detectTopicDetection(clean);
-    if (isTopic) {
-      clean._requestMode = "topic";
-      const tdConfig = config.modelProvider?.topicDetectionModel ?? "default";
-      if (tdConfig.toLowerCase() !== "default") {
-        clean.model = tdConfig;
-        clean._topicDetectionModel = tdConfig;
-      }
-    }
-  }
-
   return clean;
 }
 
@@ -1329,12 +1305,11 @@ async function runAgentLoop({
   providerType,
   headers,
 }) {
-  console.log('[DEBUG] runAgentLoop ENTERED - providerType:', providerType, 'messages:', cleanPayload.messages?.length);
-  logger.info({ providerType, messageCount: cleanPayload.messages?.length }, 'runAgentLoop ENTERED');
+  logger.info({ providerType, messageCount: cleanPayload.messages?.length }, 'runAgentLoop entered');
   const settings = resolveLoopOptions(options);
   // Detect context window size for intelligent compression
   const contextWindowTokens = await getContextWindow();
-  console.log('[DEBUG] Context window detected:', contextWindowTokens, 'tokens for provider:', providerType);
+  logger.info({ contextWindowTokens, providerType, model: requestedModel }, `Context window detected: ${contextWindowTokens} tokens for model: ${requestedModel} (provider: ${providerType})`);
   // Initialize audit logger (no-op if disabled)
   const auditLogger = createAuditLogger(config.audit);
   const start = Date.now();
@@ -1342,7 +1317,7 @@ async function runAgentLoop({
   let toolCallsExecuted = 0;
   let fallbackPerformed = false;
   const toolCallNames = new Map();
-  const toolCallHistory = new Map(); // Track tool calls to detect loops: signature -> counta
+  const toolCallHistory = new Map(); // Track tool calls to detect loops: signature -> count
   let loopWarningInjected = false; // Track if we've already warned about loops
   let emptyResponseRetried = false; // Track if we've retried after an empty LLM response
 
@@ -1710,34 +1685,7 @@ IMPORTANT TOOL USAGE RULES:
     });
   }
 
-  let databricksResponse;
-  try {
-    databricksResponse = await invokeModel(cleanPayload);
-  } catch (modelError) {
-    const isConnectionError = modelError.cause?.code === 'ECONNREFUSED'
-      || modelError.message?.includes('fetch failed')
-      || modelError.code === 'ECONNREFUSED';
-    if (isConnectionError) {
-      logger.error(`Provider ${providerType} is unreachable (connection refused). Is it running?`);
-      return {
-        response: {
-          status: 503,
-          body: {
-            error: {
-              type: "provider_unreachable",
-              message: `Provider ${providerType} is unreachable. Is the service running?`,
-            },
-          },
-          terminationReason: "provider_unreachable",
-        },
-        steps,
-        durationMs: Date.now() - start,
-        terminationReason: "provider_unreachable",
-      };
-    }
-    throw modelError;
-  }
-
+  const databricksResponse = await invokeModel(cleanPayload);
   // Extract and log actual token usage
   const actualUsage = databricksResponse.ok && config.tokenTracking?.enabled !== false
     ? tokens.extractUsageFromResponse(databricksResponse.json)
@@ -1803,15 +1751,6 @@ IMPORTANT TOOL USAGE RULES:
       });
     }
   }
-    logger.info({
-      messageContent: databricksResponse.json?.message?.content
-        ? (typeof databricksResponse.json.message.content === 'string'
-          ? databricksResponse.json.message.content.substring(0, 500)
-          : JSON.stringify(databricksResponse.json.message.content).substring(0, 500))
-        : 'NO_CONTENT',
-      hasToolCalls: !!databricksResponse.json?.message?.tool_calls,
-      toolCallCount: databricksResponse.json?.message?.tool_calls?.length || 0
-    }, "=== RAW LLM RESPONSE CONTENT ===");
 
     // Handle streaming responses (pass through without buffering)
     if (databricksResponse.stream) {
@@ -1911,17 +1850,44 @@ IMPORTANT TOOL USAGE RULES:
           _anthropic_block: block,
         }));
 
-      logger.info(
+      logger.debug(
         {
           sessionId: session?.id ?? null,
-          step: steps,
           contentBlocks: contentArray.length,
           toolCallsFound: toolCalls.length,
-          toolNames: toolCalls.map(tc => tc.function?.name || tc.name),
           stopReason: databricksResponse.json?.stop_reason,
         },
         "Azure Anthropic response parsed",
       );
+    } else if (providerType === "ollama") {
+      // Ollama format: { message: { role, content, tool_calls }, done }
+      message = databricksResponse.json?.message ?? {};
+      toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+      // FALLBACK: If no tool_calls but text contains commands, extract them
+      if (toolCalls.length === 0 && message.content) {
+        const { extractToolCallsFromText } = require("../clients/ollama-utils");
+        const extracted = extractToolCallsFromText(message.content, config.ollama?.model);
+        if (extracted) {
+          toolCalls = extracted;
+          logger.info({
+            sessionId: session?.id ?? null,
+            extractedCount: extracted.length,
+            toolNames: extracted.map(tc => tc.function?.name),
+            originalText: message.content.substring(0, 200),
+          }, "Extracted tool calls from text fallback");
+        }
+      }
+
+      logger.info({
+        hasMessage: !!databricksResponse.json?.message,
+        hasToolCalls: toolCalls.length > 0,
+        toolCallCount: toolCalls.length,
+        toolNames: toolCalls.map(tc => tc.function?.name),
+        done: databricksResponse.json?.done,
+        fullToolCalls: JSON.stringify(toolCalls),
+        fullResponseMessage: JSON.stringify(databricksResponse.json?.message)
+      }, "=== OLLAMA TOOL CALLS EXTRACTION ===");
     } else {
       // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
       const choice = databricksResponse.json?.choices?.[0];
@@ -1936,6 +1902,7 @@ IMPORTANT TOOL USAGE RULES:
 
         for (const call of toolCalls) {
           const signature = getToolCallSignature(call);
+
           if (!seenSignatures.has(signature)) {
             seenSignatures.add(signature);
             uniqueToolCalls.push(call);
@@ -1962,78 +1929,7 @@ IMPORTANT TOOL USAGE RULES:
           },
           "LLM Response: Tool calls requested (after deduplication)",
         );
-      } else if (providerType === "ollama") {
-        // Ollama format: { message: { role, content, tool_calls }, done }
-        message = databricksResponse.json?.message ?? {};
-        toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-
-        logger.info({
-          hasMessage: !!databricksResponse.json?.message,
-          hasToolCalls: toolCalls.length > 0,
-          toolCallCount: toolCalls.length,
-          toolNames: toolCalls.map(tc => tc.function?.name),
-          done: databricksResponse.json?.done,
-          fullToolCalls: JSON.stringify(toolCalls),
-          fullResponseMessage: JSON.stringify(databricksResponse.json?.message)
-        }, "=== OLLAMA TOOL CALLS EXTRACTION ===");
-      } else {
-        // OpenAI/Databricks format: { choices: [{ message: { tool_calls: [...] } }] }
-        const choice = databricksResponse.json?.choices?.[0];
-        message = choice?.message ?? {};
-        toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-
-        // Deduplicate tool calls for OpenAI format too
-        if (toolCalls.length > 0) {
-          const uniqueToolCalls = [];
-          const seenSignatures = new Set();
-          let duplicatesRemoved = 0;
-
-          for (const call of toolCalls) {
-            const signature = getToolCallSignature(call);
-
-            if (!seenSignatures.has(signature)) {
-              seenSignatures.add(signature);
-              uniqueToolCalls.push(call);
-            } else {
-              duplicatesRemoved++;
-              logger.warn({
-                sessionId: session?.id ?? null,
-                toolName: call.function?.name || call.name,
-                toolId: call.id,
-                signature: signature.substring(0, 32),
-              }, "Duplicate tool call removed (same tool with identical parameters in single response)");
-            }
-          }
-
-          toolCalls = uniqueToolCalls;
-
-          logger.info(
-            {
-              sessionId: session?.id ?? null,
-              step: steps,
-              toolCallsFound: toolCalls.length,
-              duplicatesRemoved,
-              toolNames: toolCalls.map(tc => tc.function?.name || tc.name),
-            },
-            "LLM Response: Tool calls requested (after deduplication)",
-          );
-        }
       }
-    }
-
-    // Guard: drop hallucinated tool calls when no tools were sent to the model.
-    // Some models (e.g. Llama 3.1) hallucinate tool_call blocks from conversation
-    // history even when the request contained zero tool definitions.
-    const toolsWereSent = Array.isArray(cleanPayload.tools) && cleanPayload.tools.length > 0;
-    if (toolCalls.length > 0 && !toolsWereSent) {
-      logger.warn({
-        sessionId: session?.id ?? null,
-        step: steps,
-        hallucinated: toolCalls.map(tc => tc.function?.name || tc.name),
-        noToolInjection: !!cleanPayload._noToolInjection,
-      }, "Dropped hallucinated tool calls (no tools were sent to model)");
-      toolCalls = [];
-      // If there's also no text content, treat as empty response (handled below)
     }
 
     // === EMPTY RESPONSE DETECTION (primary) ===
@@ -2051,7 +1947,6 @@ IMPORTANT TOOL USAGE RULES:
     })();
 
     if (toolCalls.length === 0 && !rawTextContent) {
-      console.log('[EMPTY RESPONSE] No text content and no tool calls - step:', steps, 'retried:', emptyResponseRetried);
       logger.warn({
         sessionId: session?.id ?? null,
         step: steps,
@@ -2101,7 +1996,7 @@ IMPORTANT TOOL USAGE RULES:
       // Convert OpenAI/OpenRouter format to Anthropic format for session storage
       let sessionContent;
       if (providerType === "azure-anthropic") {
-        // Azure Anthropic already returns content in Anthropic
+        // Azure Anthropic already returns content in Anthropic format
         sessionContent = databricksResponse.json?.content ?? [];
       } else {
         // Convert OpenAI/OpenRouter format to Anthropic content blocks
@@ -2396,15 +2291,6 @@ IMPORTANT TOOL USAGE RULES:
             }
 
             cleanPayload.messages.push(toolMessage);
-
-            logger.info(
-              {
-                toolName: execution.name,
-                content: typeof toolMessage.content === 'string'
-                ? toolMessage.content.substring(0, 500)
-                : JSON.stringify(toolMessage.content).substring(0, 500)
-              }, "Tool result content sent to LLM",
-            );
 
             // Convert to Anthropic format for session storage
             let sessionToolResultContent;
@@ -3321,7 +3207,7 @@ IMPORTANT TOOL USAGE RULES:
             session,
             cwd,
             requestMessages: cleanPayload.messages,
-            providerType,            
+            providerType,
           });
 
           const toolResultMessage = createFallbackToolResultMessage(providerType, {
@@ -3464,18 +3350,6 @@ IMPORTANT TOOL USAGE RULES:
       },
       "Agent loop completed successfully",
     );
-
-    // DIAGNOSTIC: Log response being returned
-    logger.info({
-      sessionId: session?.id ?? null,
-      status: 200,
-      hasBody: !!anthropicPayload,
-      bodyKeys: anthropicPayload ? Object.keys(anthropicPayload) : [],
-      contentType: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? 'array' : typeof anthropicPayload.content) : 'none',
-      contentLength: anthropicPayload?.content ? (Array.isArray(anthropicPayload.content) ? anthropicPayload.content.length : String(anthropicPayload.content).length) : 0,
-      stopReason: anthropicPayload?.stop_reason
-    }, "=== RETURNING RESPONSE TO CLIENT ===");
-
     return {
       response: {
         status: 200,
@@ -3542,114 +3416,6 @@ IMPORTANT TOOL USAGE RULES:
   };
 }
 
-/**
- * Detect if the current request is a suggestion mode call.
- * Scans the last user message for the [SUGGESTION MODE: marker.
- * @param {Array} messages - The conversation messages
- * @returns {{ isSuggestionMode: boolean }}
- */
-function detectSuggestionMode(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return { isSuggestionMode: false };
-  }
-  // Scan from the end to find the last user message
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg?.role !== 'user') continue;
-    const content = typeof msg.content === 'string'
-      ? msg.content
-      : Array.isArray(msg.content)
-        ? msg.content.map(b => b.text || '').join(' ')
-        : '';
-    if (content.includes('[SUGGESTION MODE:')) {
-      return { isSuggestionMode: true };
-    }
-    // Only check the last user message
-    break;
-  }
-  return { isSuggestionMode: false };
-}
-
-/**
- * Detect if the current request is a topic detection/classification call.
- * These requests typically have a system prompt asking to classify conversation
- * topics, with no tools and very short messages. They waste GPU time on large
- * models (30-90s just to classify a topic).
- *
- * Detection heuristics:
- *  1. System prompt contains topic classification instructions
- *  2. No tools in the payload (topic detection never needs tools)
- *  3. Short message count (typically 1-3 messages)
- *
- * @param {Object} payload - The request payload
- * @returns {{ isTopicDetection: boolean }}
- */
-function detectTopicDetection(payload) {
-  if (!payload) return { isTopicDetection: false };
-
-  // Topic detection requests have no tools
-  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-    return { isTopicDetection: false };
-  }
-
-  // Check system prompt for topic classification patterns
-  const systemText = typeof payload.system === 'string'
-    ? payload.system
-    : Array.isArray(payload.system)
-      ? payload.system.map(b => b.text || '').join(' ')
-      : '';
-
-  // Also check first message if system prompt is embedded there
-  let firstMsgText = '';
-  if (Array.isArray(payload.messages) && payload.messages.length > 0) {
-    const first = payload.messages[0];
-    if (first?.role === 'user' || first?.role === 'system') {
-      firstMsgText = typeof first.content === 'string'
-        ? first.content
-        : Array.isArray(first.content)
-          ? first.content.map(b => b.text || '').join(' ')
-          : '';
-    }
-  }
-
-  const combined = systemText + ' ' + firstMsgText;
-  const lc = combined.toLowerCase();
-
-  // Match patterns that Claude Code uses for topic detection
-  const topicPatterns = [
-    'new conversation topic',
-    'topic change',
-    'classify the topic',
-    'classify this message',
-    'conversation topic',
-    'topic classification',
-    'determines the topic',
-    'determine the topic',
-    'categorize the topic',
-    'what topic',
-    'identify the topic',
-  ];
-
-  const hasTopicPattern = topicPatterns.some(p => lc.includes(p));
-
-  if (hasTopicPattern) {
-    return { isTopicDetection: true };
-  }
-
-  // Additional heuristic: very short payload with no tools and system prompt
-  // mentioning "topic" or "classify"
-  if (
-    !payload.tools &&
-    Array.isArray(payload.messages) &&
-    payload.messages.length <= 3 &&
-    (lc.includes('topic') || lc.includes('classify'))
-  ) {
-    return { isTopicDetection: true };
-  }
-
-  return { isTopicDetection: false };
-}
-
 async function processMessage({ payload, headers, session, cwd, options = {} }) {
   const requestedModel =
     payload?.model ??
@@ -3658,32 +3424,6 @@ async function processMessage({ payload, headers, session, cwd, options = {} }) 
   const wantsThinking =
     typeof headers?.["anthropic-beta"] === "string" &&
     headers["anthropic-beta"].includes("interleaved-thinking");
-
-  // === SUGGESTION MODE: Early return when SUGGESTION_MODE_MODEL=none ===
-  const { isSuggestionMode } = detectSuggestionMode(payload?.messages);
-  const suggestionModelConfig = config.modelProvider?.suggestionModeModel ?? "default";
-  if (isSuggestionMode && suggestionModelConfig.toLowerCase() === "none") {
-    logger.info('Suggestion mode: skipping LLM call (SUGGESTION_MODE_MODEL=none)');
-    return {
-      response: {
-        json: {
-          id: `msg_suggestion_skip_${Date.now()}`,
-          type: "message",
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-          model: requestedModel,
-          stop_reason: "end_turn",
-          stop_sequence: null,
-          usage: { input_tokens: 0, output_tokens: 0 },
-        },
-        ok: true,
-        status: 200,
-      },
-      steps: 0,
-      durationMs: 0,
-      terminationReason: "suggestion_mode_skip",
-    };
-  }
 
   // === TOOL LOOP GUARD (EARLY CHECK) ===
   // Check BEFORE sanitization since sanitizePayload removes conversation history

@@ -15,7 +15,9 @@ const TOOL_CAPABLE_MODELS = new Set([
   "mistral-nemo",
   "firefunction-v2",
   "kimi-k2.5",
-  "nemotron"
+  "nemotron",
+  "glm-4",
+  "glm4",
 ]);
 
 /**
@@ -93,23 +95,19 @@ function convertAnthropicToolsToOllama(anthropicTools) {
   }));
 }
 
-/**
- * Extract tool call from text when LLM outputs JSON instead of using tool_calls
- * Handles formats like: {"name": "Read", "parameters": {...}}
- *
- * @param {string} text - Text content that may contain JSON tool call
- * @returns {object|null} - Tool call object in Ollama format, or null if not found
- */
-function extractToolCallFromText(text) {
-  if (!text || typeof text !== 'string') return null;
+// Regex for validating shell commands (shared by bullet-point and fenced-block strategies)
+const SHELL_COMMAND_RE = /^(git|ls|cd|cat|head|tail|grep|find|mkdir|rm|cp|mv|pwd|echo|curl|wget|npm|node|python|pip|docker|kubectl|make|go|cargo|rustc)\b/;
 
-  // Find potential JSON start - look for {"name" pattern
+/**
+ * Strategy: JSON tool call format {"name": "...", "parameters": {...}}
+ * @param {string} text
+ * @returns {object[]|null}
+ */
+function jsonToolCall(text) {
   const startMatch = text.match(/\{\s*"name"\s*:/);
   if (!startMatch) return null;
 
   const startIdx = startMatch.index;
-
-  // Find matching closing brace using brace counting
   let braceCount = 0;
   let endIdx = -1;
   for (let i = startIdx; i < text.length; i++) {
@@ -125,31 +123,155 @@ function extractToolCallFromText(text) {
 
   if (endIdx === -1) return null;
 
-  const jsonStr = text.substring(startIdx, endIdx);
-
   try {
-    const parsed = JSON.parse(jsonStr);
-
-    if (!parsed.name || !parsed.parameters) {
-      return null;
+    const parsed = JSON.parse(text.substring(startIdx, endIdx));
+    if (parsed.name && parsed.parameters) {
+      logger.info({
+        toolName: parsed.name,
+        originalText: text.substring(0, 200)
+      }, "Extracted JSON tool call from text (jsonToolCall strategy)");
+      return [{
+        function: {
+          name: parsed.name,
+          arguments: parsed.parameters
+        }
+      }];
     }
-
-    logger.info({
-      toolName: parsed.name,
-      params: parsed.parameters,
-      originalText: text.substring(0, 200)
-    }, "Extracted tool call from text content (fallback parsing)");
-
-    return {
-      function: {
-        name: parsed.name,
-        arguments: parsed.parameters
-      }
-    };
   } catch (e) {
-    logger.debug({ error: e.message, text: text.substring(0, 200) }, "Failed to parse extracted tool call");
-    return null;
+    logger.debug({ error: e.message }, "Failed to parse JSON tool call from text");
   }
+  return null;
+}
+
+/**
+ * Strategy: Bullet-point shell commands (● cmd, • cmd, - cmd, * cmd)
+ * GLM and similar models sometimes output commands as bullet points instead of tool_calls
+ * @param {string} text
+ * @returns {object[]|null}
+ */
+function bulletPointCommands(text) {
+  const results = [];
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^\s*[●•\-\*❯>]\s+(.+)$/);
+    if (match) {
+      const command = match[1].trim();
+      if (SHELL_COMMAND_RE.test(command)) {
+        logger.info({
+          command,
+          originalLine: line.trim()
+        }, "Extracted shell command from bullet-point text (bulletPointCommands strategy)");
+        results.push({
+          function: {
+            name: "Bash",
+            arguments: { command }
+          }
+        });
+      }
+    }
+  }
+  return results.length > 0 ? results : null;
+}
+
+/**
+ * Strategy: Fenced code block commands (```bash, ```sh, ```shell, etc.)
+ * Some models output shell commands inside markdown code blocks
+ * @param {string} text
+ * @returns {object[]|null}
+ */
+function fencedCodeBlockCommands(text) {
+  const results = [];
+  // Match ```bash, ```sh, ```shell, ```zsh, ```console, ```terminal (with optional whitespace)
+  const fenceRe = /```(?:bash|sh|shell|zsh|console|terminal)\s*\n([\s\S]*?)```/gi;
+  let fenceMatch;
+  while ((fenceMatch = fenceRe.exec(text)) !== null) {
+    const blockContent = fenceMatch[1];
+    const lines = blockContent.split('\n');
+    for (const line of lines) {
+      // Strip leading $ or # prompt characters
+      const cleaned = line.replace(/^\s*[$#]\s*/, '').trim();
+      if (!cleaned) continue;
+      if (SHELL_COMMAND_RE.test(cleaned)) {
+        logger.info({
+          command: cleaned,
+          originalBlock: blockContent.substring(0, 200)
+        }, "Extracted shell command from fenced code block (fencedCodeBlockCommands strategy)");
+        results.push({
+          function: {
+            name: "Bash",
+            arguments: { command: cleaned }
+          }
+        });
+      }
+    }
+  }
+  return results.length > 0 ? results : null;
+}
+
+// Registry: model prefix → ordered list of extraction strategy names
+const MODEL_TOOL_STRATEGIES = {
+  "glm": ["bulletPointCommands", "fencedCodeBlockCommands"],
+  // Add more models as needed:
+  // "deepseek": ["fencedCodeBlockCommands"],
+};
+
+// Strategy functions (each returns array of tool calls or null)
+const EXTRACTION_STRATEGIES = {
+  jsonToolCall,
+  bulletPointCommands,
+  fencedCodeBlockCommands,
+};
+
+/**
+ * Extract tool calls from text when LLM outputs them as text instead of using tool_calls.
+ *
+ * Uses a registry-based approach: model name prefixes map to ordered lists of
+ * extraction strategies. JSON extraction always runs first (universal).
+ *
+ * @param {string} text - Text content that may contain tool calls
+ * @param {string} [modelName] - Optional model name for model-specific strategies
+ * @returns {object[]|null} - Array of tool call objects in Ollama format, or null if none found
+ */
+function extractToolCallsFromText(text, modelName) {
+  if (!text || typeof text !== 'string') return null;
+
+  // Always try JSON first (universal)
+  const jsonResults = jsonToolCall(text);
+  if (jsonResults) return jsonResults;
+
+  // Determine which strategies to try
+  let strategies = [];
+  if (config.aggressiveToolPatching) {
+    // Try everything
+    strategies = Object.keys(EXTRACTION_STRATEGIES).filter(k => k !== 'jsonToolCall');
+  } else if (modelName) {
+    // Model-specific strategies
+    const normalized = modelName.toLowerCase();
+    for (const [prefix, strats] of Object.entries(MODEL_TOOL_STRATEGIES)) {
+      if (normalized.startsWith(prefix)) {
+        strategies = strats;
+        break;
+      }
+    }
+  }
+
+  for (const stratName of strategies) {
+    const fn = EXTRACTION_STRATEGIES[stratName];
+    if (!fn) continue;
+    const results = fn(text);
+    if (results) {
+      logger.info({ strategy: stratName, modelName, count: results.length }, "Tool extraction matched via strategy registry");
+      return results;
+    }
+  }
+
+  return null;
+}
+
+// Backward-compatible wrapper — returns first match only
+function extractToolCallFromText(text, modelName) {
+  const results = extractToolCallsFromText(text, modelName);
+  return results ? results[0] : null;
 }
 
 /**
@@ -182,7 +304,7 @@ function extractToolCallFromText(text) {
  */
 function convertOllamaToolCallsToAnthropic(ollamaResponse) {
   const message = ollamaResponse?.message || {};
-  const toolCalls = message.tool_calls || [];
+  let toolCalls = message.tool_calls || [];
   const textContent = message.content || "";
 
   // FALLBACK: If no tool_calls but text contains JSON tool call, parse it
@@ -286,4 +408,6 @@ module.exports = {
   buildAnthropicResponseFromOllama,
   modelNameSupportsTools,
   extractToolCallFromText,
+  extractToolCallsFromText,
+  MODEL_TOOL_STRATEGIES,
 };

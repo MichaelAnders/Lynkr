@@ -150,6 +150,9 @@ const topicDetectionModel = (process.env.TOPIC_DETECTION_MODEL ?? "default").tri
 const hotReloadEnabled = process.env.HOT_RELOAD_ENABLED !== "false"; // default true
 const hotReloadDebounceMs = Number.parseInt(process.env.HOT_RELOAD_DEBOUNCE_MS ?? "1000", 10);
 
+// Aggressive tool patching: try all text-to-tool extraction strategies for any model
+const aggressiveToolPatching = process.env.AGGRESSIVE_TOOL_PATCHING === "true";
+
 // Hybrid routing configuration
 const preferOllama = process.env.PREFER_OLLAMA === "true";
 const fallbackEnabled = process.env.FALLBACK_ENABLED !== "false"; // default true
@@ -624,6 +627,7 @@ var config = {
     openRouterMaxToolsForRouting,
     fallbackProvider,
   },
+  aggressiveToolPatching,
   toolExecutionMode,
   server: {
     jsonLimit: process.env.REQUEST_JSON_LIMIT ?? "1gb",
@@ -897,6 +901,9 @@ function reloadConfig() {
   config.zai.model = process.env.ZAI_MODEL?.trim() || "GLM-4.7";
   config.vertex.apiKey = process.env.VERTEX_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || null;
   config.vertex.model = process.env.VERTEX_MODEL?.trim() || "gemini-2.0-flash";
+
+  // Aggressive tool patching
+  config.aggressiveToolPatching = process.env.AGGRESSIVE_TOOL_PATCHING === "true";
 
   // Model provider settings
   const newProvider = (process.env.MODEL_PROVIDER ?? "databricks").toLowerCase();
