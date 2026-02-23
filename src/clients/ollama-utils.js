@@ -209,21 +209,30 @@ function convertOllamaToolCallsToAnthropic(ollamaResponse, modelName = null) {
   let toolCallsWereExtracted = false;
 
   // FALLBACK: If no tool_calls but text contains tool calls, parse them
+  // ONLY if the model has a SPECIFIC parser (not GenericToolParser).
+  // This preserves old behavior for unknown models while enabling
+  // text parsing for models like glm-4.7 that have dedicated parsers.
   if (toolCalls.length === 0 && textContent) {
-    const extracted = extractToolCallsFromText(textContent, modelName);
-    if (extracted && extracted.length > 0) {
-      logger.info({
-        extractedCount: extracted.length,
-        toolNames: extracted.map(tc => tc.function?.name),
-        modelName
-      }, "Using fallback text parsing for tool calls");
-      toolCalls = extracted;
-      toolCallsWereExtracted = true;
+    const { getParserForModel } = require('../parsers');
+    const parser = getParserForModel(modelName);
+    // Only use text parsing if this model has a specific parser
+    if (parser.constructor.name !== 'GenericToolParser') {
+      const extracted = extractToolCallsFromText(textContent, modelName);
+      if (extracted && extracted.length > 0) {
+        logger.info({
+          extractedCount: extracted.length,
+          toolNames: extracted.map(tc => tc.function?.name),
+          modelName,
+          parser: parser.constructor.name
+        }, "Using fallback text parsing for tool calls");
+        toolCalls = extracted;
+        toolCallsWereExtracted = true;
 
-      // Strip extracted tool calls from text content to prevent double-display
-      // This ensures tool results are shown instead of the command text
-      textContent = "";
-      logger.debug("Stripped tool call text from response to allow tool results display");
+        // Strip extracted tool calls from text content to prevent double-display
+        // This ensures tool results are shown instead of the command text
+        textContent = "";
+        logger.debug("Stripped tool call text from response to allow tool results display");
+      }
     }
   }
 
