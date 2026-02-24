@@ -46,6 +46,29 @@ if (logFile) {
   }
 }
 
+// Clear SQLite context databases BEFORE initializing
+// Controlled by LYNKR_CLEAR_SQLITE_CONTEXT environment variable
+if (process.env.LYNKR_CLEAR_SQLITE_CONTEXT === 'true') {
+  const dataDir = path.join(__dirname, '..', 'data');
+  const sqliteDatabases = ['sessions.db', 'lynkr.db', 'budgets.db', 'prompt-cache.db'];
+
+  try {
+    let deletedCount = 0;
+    for (const dbFile of sqliteDatabases) {
+      const dbPath = path.join(dataDir, dbFile);
+      if (fs.existsSync(dbPath)) {
+        fs.unlinkSync(dbPath);
+        deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`[STARTUP] Cleared ${deletedCount} SQLite database file(s) from ${dataDir}`);
+    }
+  } catch (err) {
+    console.error(`[STARTUP] Failed to clear SQLite context: ${err.message}`);
+  }
+}
+
 const loggingMiddleware = require("./api/middleware/logging");
 const router = require("./api/router");
 const { sessionMiddleware } = require("./api/middleware/session");
