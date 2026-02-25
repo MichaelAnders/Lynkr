@@ -148,6 +148,8 @@ if (dedupEnabled) {
 					//   logger.info(obj, msg?, ...args)  — first arg is an object
 					//   logger.info(msg, ...args)        — first arg is a string
 					if (args.length > 0 && args[0] !== null && typeof args[0] === 'object') {
+						// Set logger and level for detail log emission
+						deduplicator.setLogger(target, prop);
 						args[0] = deduplicator.deduplicateObject(args[0]);
 					}
 					return target[prop].apply(target, args);

@@ -29,6 +29,8 @@ class LogDeduplicator {
     this._sessionMap = new Map(); // hash -> { preview, category, firstSeen, lastSeen, count }
     this._dirty = false;
     this._writing = false;
+    this._logger = null; // logger instance for emitting detail logs (injected later)
+    this._currentLogLevel = 'info'; // will be set before deduplication
     this._loadMap();
   }
 
@@ -100,13 +102,20 @@ class LogDeduplicator {
   }
 
   /**
-   * Build preview: first N chars + "..." + last N chars
+   * Build preview: smart preview with 100 char budget
+   * For strings <= 100: show full
+   * For strings > 100: show first 25% (max 100) + "..." + last 25% (max 100)
    */
   _buildPreview(str) {
+    if (str.length <= 100) {
+      return str;
+    }
+    // For > 100 chars: show first 25% and last 25%, each capped at 100
+    const quarterLength = Math.min(Math.floor(str.length * 0.25), 100);
     return (
-      str.substring(0, PREVIEW_EACH_SIDE) +
+      str.substring(0, quarterLength) +
       '...' +
-      str.substring(str.length - PREVIEW_EACH_SIDE)
+      str.substring(str.length - quarterLength)
     );
   }
 
@@ -164,6 +173,43 @@ class LogDeduplicator {
   }
 
   /**
+   * Set logger instance for emitting detail logs
+   */
+  setLogger(logger, currentLevel = 'info') {
+    this._logger = logger;
+    this._currentLogLevel = currentLevel;
+  }
+
+  /**
+   * Emit detail log for a deduplicated field
+   */
+  _emitDetailLog(fieldName, value) {
+    if (!this._logger) return;
+    try {
+      this._logger[this._currentLogLevel](
+        { value, field: fieldName },
+        `detail.${fieldName}`
+      );
+    } catch (err) {
+      // Silently fail if detail log can't be emitted
+    }
+  }
+
+  /**
+   * Check if a field name warrants a detail log entry
+   */
+  _shouldEmitDetailLog(keyName) {
+    const k = (keyName || '').toLowerCase();
+    return (
+      k.includes('content') ||
+      k.includes('usermessage') ||
+      k.includes('user_message') ||
+      k.includes('systemprompt') ||
+      k.includes('system_prompt')
+    );
+  }
+
+  /**
    * Recursively walk an object and deduplicate large strings
    */
   deduplicateObject(obj, _seen = new Set()) {
@@ -199,6 +245,10 @@ class LogDeduplicator {
     for (const [key, value] of Object.entries(obj)) {
       if (typeof value === 'string' && value.length > this.threshold) {
         result[key] = this.processString(value, key);
+        // Emit detail log for important fields like content, userMessage, systemPrompt
+        if (this._shouldEmitDetailLog(key)) {
+          this._emitDetailLog(key, value);
+        }
       } else if (value && typeof value === 'object') {
         result[key] = this.deduplicateObject(value, _seen);
       } else {
