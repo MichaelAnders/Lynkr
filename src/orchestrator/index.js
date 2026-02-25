@@ -918,10 +918,10 @@ function toAnthropicResponse(openai, requestedModel, wantsThinking) {
 async function sanitizePayload(payload) {
   const clean = JSON.parse(JSON.stringify(payload ?? {}));
   const requestedModel =
+    config.modelProvider?.defaultModel ??
     (typeof payload?.model === "string" && payload.model.trim().length > 0
       ? payload.model.trim()
       : null) ??
-    config.modelProvider?.defaultModel ??
     "databricks-claude-sonnet-4-5";
   clean.model = requestedModel;
   const providerType = config.modelProvider?.type ?? "databricks";
@@ -2835,7 +2835,7 @@ IMPORTANT TOOL USAGE RULES:
       message = choice?.message ?? {};
       toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
-      // Deduplicate tool calls for OpenAI format too
+      // Deduplicate tool calls for OpenAI format too // BJÖRN START!!!!
       if (toolCalls.length > 0) {
         const uniqueToolCalls = [];
         const seenSignatures = new Set();
@@ -2869,7 +2869,7 @@ IMPORTANT TOOL USAGE RULES:
           },
           "LLM Response: Tool calls requested (after deduplication)",
         );
-      }
+      } // BJÖRN END
     }
 
     // Guard: drop hallucinated tool calls when no tools were sent to the model.
@@ -2877,7 +2877,7 @@ IMPORTANT TOOL USAGE RULES:
     // history even when the request contained zero tool definitions.
     // For Ollama, the client injects STANDARD_TOOLS independently of cleanPayload.tools,
     // so only treat tool calls as hallucinated if _noToolInjection was explicitly set.
-    const ollamaToolsInjected = providerType === 'ollama' && !cleanPayload._noToolInjection;
+    const ollamaToolsInjected = providerType === 'ollama' && !cleanPayload._noToolInjection; // BJÖRN DIFF
     const toolsWereSent = (Array.isArray(cleanPayload.tools) && cleanPayload.tools.length > 0) || ollamaToolsInjected;
     if (toolCalls.length > 0 && !toolsWereSent) {
       logger.warn({
@@ -2890,7 +2890,7 @@ IMPORTANT TOOL USAGE RULES:
       // If there's also no text content, treat as empty response (handled below)
     }
 
-    // If compare mode is enabled and we have both responses, compare tool calls
+    // If compare mode is enabled and we have both responses, compare tool calls // BJÖRN DIFF
     let toolCallComparison = null;
     if (config.toolExecutionCompareMode && conversationResponse?.json && shouldUseToolProvider) {
       const conversationToolCalls = extractToolCallsFromResponse(
@@ -2919,337 +2919,340 @@ IMPORTANT TOOL USAGE RULES:
       }
     }
 
-    // === EMPTY RESPONSE DETECTION (primary) ===
-    // Check raw extracted message for empty content before tool handling or conversion
-    const rawTextContent = (() => {
-      if (typeof message.content === 'string') return message.content.trim();
-      if (Array.isArray(message.content)) {
-        return message.content
-          .filter(b => b.type === 'text')
-          .map(b => b.text || '')
-          .join('')
-          .trim();
-      }
-      return '';
-    })();
+    if (1 == 0) { // BJÖRN DIFF
+                // === EMPTY RESPONSE DETECTION (primary) === 
+                // Check raw extracted message for empty content before tool handling or conversion
+                const rawTextContent = (() => {
+                  if (typeof message.content === 'string') return message.content.trim();
+                  if (Array.isArray(message.content)) {
+                    return message.content
+                      .filter(b => b.type === 'text')
+                      .map(b => b.text || '')
+                      .join('')
+                      .trim();
+                  }
+                  return '';
+                })();
+//              }
 
-    if (toolCalls.length === 0 && !rawTextContent) {
-      console.log('[EMPTY RESPONSE] No text content and no tool calls - step:', steps, 'retried:', emptyResponseRetried);
-      logger.warn({
-        sessionId: session?.id ?? null,
-        step: steps,
-        messageKeys: Object.keys(message),
-        contentType: typeof message.content,
-        rawContentPreview: String(message.content || '').substring(0, 100),
-      }, "Empty LLM response detected (no text, no tool calls)");
+              if (toolCalls.length === 0 && !rawTextContent) { // HIER!!!
+                console.log('[EMPTY RESPONSE] No text content and no tool calls - step:', steps, 'retried:', emptyResponseRetried);
+                logger.warn({
+                  sessionId: session?.id ?? null,
+                  step: steps,
+                  messageKeys: Object.keys(message),
+                  contentType: typeof message.content,
+                  rawContentPreview: String(message.content || '').substring(0, 100),
+                }, "Empty LLM response detected (no text, no tool calls)");
 
-      // Retry once with a nudge
-      if (steps < settings.maxSteps && !emptyResponseRetried) {
-        emptyResponseRetried = true;
-        cleanPayload.messages.push({
-          role: "assistant",
-          content: "",
-        });
-        cleanPayload.messages.push({
-          role: "user",
-          content: "Please provide a response to the user's message.",
-        });
-        logger.info({ sessionId: session?.id ?? null }, "Retrying after empty response with nudge");
-        continue;
-      }
+                // Retry once with a nudge
+                if (steps < settings.maxSteps && !emptyResponseRetried) {
+                  emptyResponseRetried = true;
+                  cleanPayload.messages.push({
+                    role: "assistant",
+                    content: "",
+                  });
+                  cleanPayload.messages.push({
+                    role: "user",
+                    content: "Please provide a response to the user's message.",
+                  });
+                  logger.info({ sessionId: session?.id ?? null }, "Retrying after empty response with nudge");
+                  continue;
+                }
 
-      // Fallback after retry also returned empty
-      logger.warn({ sessionId: session?.id ?? null, steps }, "Empty response persisted after retry");
-      return {
-        response: {
-          status: 200,
-          body: {
-            id: `msg_${Date.now()}`,
-            type: "message",
-            role: "assistant",
-            model: requestedModel,
-            content: [{ type: "text", text: "I wasn't able to generate a response. Could you try rephrasing your message?" }],
-            stop_reason: "end_turn",
-            usage: { input_tokens: 0, output_tokens: 0 },
-          },
-          terminationReason: "empty_response_fallback",
-        },
-        steps,
-        durationMs: Date.now() - start,
-        terminationReason: "empty_response_fallback",
-      };
-    }
+                // Fallback after retry also returned empty
+                logger.warn({ sessionId: session?.id ?? null, steps }, "Empty response persisted after retry");
+                return {
+                  response: {
+                    status: 200,
+                    body: {
+                      id: `msg_${Date.now()}`,
+                      type: "message",
+                      role: "assistant",
+                      model: requestedModel,
+                      content: [{ type: "text", text: "I wasn't able to generate a response. Could you try rephrasing your message?" }],
+                      stop_reason: "end_turn",
+                      usage: { input_tokens: 0, output_tokens: 0 },
+                    },
+                    terminationReason: "empty_response_fallback",
+                  },
+                  steps,
+                  durationMs: Date.now() - start,
+                  terminationReason: "empty_response_fallback",
+                };
+              }
 
-    // === "Invoking tool(s):" TEXT DETECTION ===
-    // Some models (GLM-4.7, etc.) respond with "Invoking tool(s): Read, Read, Read" as TEXT
-    // instead of actual tool_calls. Always detect and log this pattern — even when tool_calls
-    // ARE present — so developers can diagnose tool dispatch issues across execution modes.
-    // GLM-4.7 also leaks XML/think tags into the content (e.g. "Grep</arg_value>", "Glob</think>").
-    const invokingToolMatch = rawTextContent &&
-      /Invoking tool\(s\):\s*(.+)/im.exec(rawTextContent.trim());
-    // Extract mentioned tools from "Invoking tool(s):" text (hoisted for use by auto-spawn below)
-    let mentionedToolsRaw = [];
-    if (invokingToolMatch) {
-      // Clean garbled XML/think tags from tool names (GLM-4.7 leaks </arg_value>, </think>, etc.)
-      mentionedToolsRaw = invokingToolMatch[1]
-        .replace(/<\/?\w+[^>]*>/g, '')  // strip any XML/HTML tags
-        .split(',')
-        .map(t => t.trim())
-        .filter(Boolean);
-      const executionModeCurrent = config.toolExecutionMode || "server";
-      const toolsStrippedBySmartSelection = !!cleanPayload._noToolInjection;
-      const toolsInPayload = Array.isArray(cleanPayload.tools) ? cleanPayload.tools.length : 0;
-      logger.warn({
-        sessionId: session?.id ?? null,
-        step: steps,
-        mentionedTools: mentionedToolsRaw,   // Full list, no dedup (e.g. ["Read", "Read", "Read"])
-        mentionedToolCount: mentionedToolsRaw.length,
-        actualToolCallCount: toolCalls.length,
-        hasActualToolCalls: toolCalls.length > 0,
-        executionMode: executionModeCurrent,  // "server", "client", or "passthrough"
-        toolsStrippedBySmartSelection,        // true = smart-selection removed tools from request
-        toolsInPayload,                       // how many tool defs are currently in the payload
-        invokeTextRetries,                    // how many retries we've done so far
-        model: requestedModel,
-        rawText: rawTextContent.substring(0, 300),
-      }, `Model output 'Invoking tool(s):' as text — actualToolCalls=${toolCalls.length}, mode=${executionModeCurrent}, toolsStripped=${toolsStrippedBySmartSelection}, retry=${invokeTextRetries}/${MAX_INVOKE_TEXT_RETRIES}`);
-    }
+              // === "Invoking tool(s):" TEXT DETECTION ===
+              // Some models (GLM-4.7, etc.) respond with "Invoking tool(s): Read, Read, Read" as TEXT
+              // instead of actual tool_calls. Always detect and log this pattern — even when tool_calls
+              // ARE present — so developers can diagnose tool dispatch issues across execution modes.
+              // GLM-4.7 also leaks XML/think tags into the content (e.g. "Grep</arg_value>", "Glob</think>").
+              const invokingToolMatch = rawTextContent &&
+                /Invoking tool\(s\):\s*(.+)/im.exec(rawTextContent.trim());
+              // Extract mentioned tools from "Invoking tool(s):" text (hoisted for use by auto-spawn below)
+              let mentionedToolsRaw = [];
+              if (invokingToolMatch) {
+                // Clean garbled XML/think tags from tool names (GLM-4.7 leaks </arg_value>, </think>, etc.)
+                mentionedToolsRaw = invokingToolMatch[1]
+                  .replace(/<\/?\w+[^>]*>/g, '')  // strip any XML/HTML tags
+                  .split(',')
+                  .map(t => t.trim())
+                  .filter(Boolean);
+                const executionModeCurrent = config.toolExecutionMode || "server";
+                const toolsStrippedBySmartSelection = !!cleanPayload._noToolInjection;
+                const toolsInPayload = Array.isArray(cleanPayload.tools) ? cleanPayload.tools.length : 0;
+                logger.warn({
+                  sessionId: session?.id ?? null,
+                  step: steps,
+                  mentionedTools: mentionedToolsRaw,   // Full list, no dedup (e.g. ["Read", "Read", "Read"])
+                  mentionedToolCount: mentionedToolsRaw.length,
+                  actualToolCallCount: toolCalls.length,
+                  hasActualToolCalls: toolCalls.length > 0,
+                  executionMode: executionModeCurrent,  // "server", "client", or "passthrough"
+                  toolsStrippedBySmartSelection,        // true = smart-selection removed tools from request
+                  toolsInPayload,                       // how many tool defs are currently in the payload
+                  invokeTextRetries,                    // how many retries we've done so far
+                  model: requestedModel,
+                  rawText: rawTextContent.substring(0, 300),
+                }, `Model output 'Invoking tool(s):' as text — actualToolCalls=${toolCalls.length}, mode=${executionModeCurrent}, toolsStripped=${toolsStrippedBySmartSelection}, retry=${invokeTextRetries}/${MAX_INVOKE_TEXT_RETRIES}`);
+              }
 
-    // Handle "Invoking tool(s):" text with NO actual tool_calls:
-    // 1. Try auto-spawning a subagent to fulfil the model's intent
-    // 2. Fall back to nudge-retry if subagent is disabled or fails
-    if (invokingToolMatch && toolCalls.length === 0 && steps < settings.maxSteps) {
+              // Handle "Invoking tool(s):" text with NO actual tool_calls:
+              // 1. Try auto-spawning a subagent to fulfil the model's intent
+              // 2. Fall back to nudge-retry if subagent is disabled or fails
+              if (invokingToolMatch && toolCalls.length === 0 && steps < settings.maxSteps) {
 
-      // --- Auto-spawn subagent ---
-      if (config.agents?.enabled && config.agents?.autoSpawn !== false && autoSpawnAttempts < MAX_AUTO_SPAWN_ATTEMPTS) {
-        autoSpawnAttempts++;
-        const uniqueMentionedTools = [...new Set(mentionedToolsRaw)];
-        const agentType = mapToolsToAgentType(uniqueMentionedTools);
-        const userText = extractLastUserText(cleanPayload.messages);
-        const prompt = buildSubagentPrompt(userText, rawTextContent, uniqueMentionedTools);
+                // --- Auto-spawn subagent ---
+                if (config.agents?.enabled && config.agents?.autoSpawn !== false && autoSpawnAttempts < MAX_AUTO_SPAWN_ATTEMPTS) {
+                  autoSpawnAttempts++;
+                  const uniqueMentionedTools = [...new Set(mentionedToolsRaw)];
+                  const agentType = mapToolsToAgentType(uniqueMentionedTools);
+                  const userText = extractLastUserText(cleanPayload.messages);
+                  const prompt = buildSubagentPrompt(userText, rawTextContent, uniqueMentionedTools);
 
-        logger.info({
-          sessionId: session?.id ?? null,
-          step: steps,
-          agentType,
-          mentionedTools: mentionedToolsRaw,
-          autoSpawnAttempt: autoSpawnAttempts,
-        }, `Auto-spawning ${agentType} subagent for 'Invoking tool(s):' text (attempt ${autoSpawnAttempts}/${MAX_AUTO_SPAWN_ATTEMPTS})`);
+                  logger.info({
+                    sessionId: session?.id ?? null,
+                    step: steps,
+                    agentType,
+                    mentionedTools: mentionedToolsRaw,
+                    autoSpawnAttempt: autoSpawnAttempts,
+                  }, `Auto-spawning ${agentType} subagent for 'Invoking tool(s):' text (attempt ${autoSpawnAttempts}/${MAX_AUTO_SPAWN_ATTEMPTS})`);
 
-        try {
-          const result = await spawnAgent(agentType, prompt, { sessionId: session?.id ?? null, mainContext: cleanPayload.messages });
-          if (result.success) {
-            // Inject model's text as assistant msg + subagent result as user msg
-            cleanPayload.messages.push({ role: "assistant", content: rawTextContent });
-            cleanPayload.messages.push({
-              role: "user",
-              content: `[Subagent ${agentType} completed]\n${result.result}`,
-            });
-            logger.info({
-              sessionId: session?.id ?? null,
-              step: steps,
-              agentType,
-              resultLength: result.result?.length ?? 0,
-            }, "Subagent completed successfully — injecting result into conversation");
-            continue; // Re-enter loop so the model can synthesize the subagent output
-          }
-          logger.warn({ sessionId: session?.id ?? null, step: steps, error: result.error }, "Subagent returned failure — falling through to nudge");
-        } catch (err) {
-          logger.warn({ sessionId: session?.id ?? null, step: steps, error: err.message }, "Subagent spawn failed — falling through to nudge");
-        }
-      }
+                  try {
+                    const result = await spawnAgent(agentType, prompt, { sessionId: session?.id ?? null, mainContext: cleanPayload.messages });
+                    if (result.success) {
+                      // Inject model's text as assistant msg + subagent result as user msg
+                      cleanPayload.messages.push({ role: "assistant", content: rawTextContent });
+                      cleanPayload.messages.push({
+                        role: "user",
+                        content: `[Subagent ${agentType} completed]\n${result.result}`,
+                      });
+                      logger.info({
+                        sessionId: session?.id ?? null,
+                        step: steps,
+                        agentType,
+                        resultLength: result.result?.length ?? 0,
+                      }, "Subagent completed successfully — injecting result into conversation");
+                      continue; // Re-enter loop so the model can synthesize the subagent output
+                    }
+                    logger.warn({ sessionId: session?.id ?? null, step: steps, error: result.error }, "Subagent returned failure — falling through to nudge");
+                  } catch (err) {
+                    logger.warn({ sessionId: session?.id ?? null, step: steps, error: err.message }, "Subagent spawn failed — falling through to nudge");
+                  }
+                }
 
-      // --- Nudge-retry fallback ---
-      if (invokeTextRetries < MAX_INVOKE_TEXT_RETRIES) {
-        invokeTextRetries++;
+                // --- Nudge-retry fallback ---
+                if (invokeTextRetries < MAX_INVOKE_TEXT_RETRIES) {
+                  invokeTextRetries++;
 
-        // === LONG-TERM ROBUSTNESS: Always keep core tools ===
-        // Set flag to prevent smart-selection from stripping core tools on retry
-        // Core tools (Read, Write, Edit, Bash, Grep, Glob) are essential for the agent to function
-        // and should never be filtered out regardless of request classification.
-        cleanPayload._invokeTextRetry = true;
+                  // === LONG-TERM ROBUSTNESS: Always keep core tools ===
+                  // Set flag to prevent smart-selection from stripping core tools on retry
+                  // Core tools (Read, Write, Edit, Bash, Grep, Glob) are essential for the agent to function
+                  // and should never be filtered out regardless of request classification.
+                  cleanPayload._invokeTextRetry = true;
 
-        // Smart-selection may have stripped tools from this request (classified as "conversation").
-        // The model clearly WANTS to use tools, so restore them for the retry.
-        if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
-          const { STANDARD_TOOLS } = require('../clients/standard-tools');
-          cleanPayload.tools = STANDARD_TOOLS;
-          delete cleanPayload._noToolInjection;
-          logger.info({
-            sessionId: session?.id ?? null,
-            step: steps,
-            restoredToolCount: STANDARD_TOOLS.length,
-          }, "Restored STANDARD_TOOLS for 'Invoking tool(s):' retry — smart-selection had stripped them");
-        }
+                  // Smart-selection may have stripped tools from this request (classified as "conversation").
+                  // The model clearly WANTS to use tools, so restore them for the retry.
+                  if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
+                    const { STANDARD_TOOLS } = require('../clients/standard-tools');
+                    cleanPayload.tools = STANDARD_TOOLS;
+                    delete cleanPayload._noToolInjection;
+                    logger.info({
+                      sessionId: session?.id ?? null,
+                      step: steps,
+                      restoredToolCount: STANDARD_TOOLS.length,
+                    }, "Restored STANDARD_TOOLS for 'Invoking tool(s):' retry — smart-selection had stripped them");
+                  }
 
-        // Feed the model's text back and tell it to use actual tool calls
-        cleanPayload.messages.push({
-          role: "assistant",
-          content: rawTextContent,
-        });
-        cleanPayload.messages.push({
-          role: "user",
-          content: `You responded with tool invocation text instead of using actual tool calls (attempt ${invokeTextRetries}/${MAX_INVOKE_TEXT_RETRIES}). `
-            + "Please use the tool_call format, not text. Call the tools now with the correct parameters.",
-        });
-        continue;
-      }
-    }
+                  // Feed the model's text back and tell it to use actual tool calls
+                  cleanPayload.messages.push({
+                    role: "assistant",
+                    content: rawTextContent,
+                  });
+                  cleanPayload.messages.push({
+                    role: "user",
+                    content: `You responded with tool invocation text instead of using actual tool calls (attempt ${invokeTextRetries}/${MAX_INVOKE_TEXT_RETRIES}). `
+                      + "Please use the tool_call format, not text. Call the tools now with the correct parameters.",
+                  });
+                  continue;
+                }
+              }
 
-    // LLM-classifier route: ask the same model if this text indicates suppressed tool-call intent
-    if (
-      toolCalls.length === 0 &&
-      rawTextContent &&
-      classifierRetries < MAX_CLASSIFIER_RETRIES
-    ) {
-      try {
-        const classifierPrompt =
-          `You are a classifier. Answer only YES or NO.\n\n` +
-          `Does the following model response indicate the model INTENDS to call a tool ` +
-          `(e.g. "Let me read...", "I'll create...", "Now let me run...", "I need to check...") ` +
-          `but did NOT actually emit a tool call?\n\n` +
-          `Model response:\n"""\n${rawTextContent.slice(0, 500)}\n"""\n\n` +
-          `Answer YES if narrating tool intent. Answer NO if it is a complete, informational, or conversational response.`;
+              // LLM-classifier route: ask the same model if this text indicates suppressed tool-call intent
+              if (
+                toolCalls.length === 0 &&
+                rawTextContent &&
+                classifierRetries < MAX_CLASSIFIER_RETRIES
+              ) {
+                try {
+                  const classifierPrompt =
+                    `You are a classifier. Answer only YES or NO.\n\n` +
+                    `Does the following model response indicate the model INTENDS to call a tool ` +
+                    `(e.g. "Let me read...", "I'll create...", "Now let me run...", "I need to check...") ` +
+                    `but did NOT actually emit a tool call?\n\n` +
+                    `Model response:\n"""\n${rawTextContent.slice(0, 500)}\n"""\n\n` +
+                    `Answer YES if narrating tool intent. Answer NO if it is a complete, informational, or conversational response.`;
 
-        const classifierResponse = await invokeModel(
-          {
-            model:       cleanPayload.model,
-            messages:    [{ role: 'user', content: classifierPrompt }],
-            max_tokens:  10,
-            temperature: 0,
-          },
-          { forceProvider: providerType, callPurpose: 'classifier' }
-        );
+                  const classifierResponse = await invokeModel(
+                    {
+                      model:       cleanPayload.model,
+                      messages:    [{ role: 'user', content: classifierPrompt }],
+                      max_tokens:  10,
+                      temperature: 0,
+                    },
+                    { forceProvider: providerType, callPurpose: 'classifier' }
+                  );
 
-        const classifierText = (
-          classifierResponse.json?.message?.content ??
-          classifierResponse.json?.choices?.[0]?.message?.content ??
-          ''
-        ).trim().toUpperCase();
+                  const classifierText = (
+                    classifierResponse.json?.message?.content ??
+                    classifierResponse.json?.choices?.[0]?.message?.content ??
+                    ''
+                  ).trim().toUpperCase();
 
-        logger.info({
-          sessionId: session?.id ?? null,
-          step: steps,
-          classifierModel: config.classifierModel,
-          classifierAnswer: classifierText,
-          rawTextPreview: rawTextContent.slice(0, 100),
-          classifierRetries,
-        }, `[CLASSIFIER] Intent-narration check: ${classifierText}`);
+                  logger.info({
+                    sessionId: session?.id ?? null,
+                    step: steps,
+                    classifierModel: config.classifierModel,
+                    classifierAnswer: classifierText,
+                    rawTextPreview: rawTextContent.slice(0, 100),
+                    classifierRetries,
+                  }, `[CLASSIFIER] Intent-narration check: ${classifierText}`);
 
-        if (classifierText.startsWith('YES')) {
-          classifierRetries++;
-          cleanPayload._invokeTextRetry = true;
+                  if (classifierText.startsWith('YES')) {
+                    classifierRetries++;
+                    cleanPayload._invokeTextRetry = true;
 
-          // Restore tools if smart-selection stripped them
-          if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
-            const { STANDARD_TOOLS } = require('../clients/standard-tools');
-            cleanPayload.tools = STANDARD_TOOLS;
-            delete cleanPayload._noToolInjection;
-            logger.info(
-              { restoredToolCount: STANDARD_TOOLS.length },
-              '[CLASSIFIER] Restored STANDARD_TOOLS for classifier retry'
-            );
-          }
+                    // Restore tools if smart-selection stripped them
+                    if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
+                      const { STANDARD_TOOLS } = require('../clients/standard-tools');
+                      cleanPayload.tools = STANDARD_TOOLS;
+                      delete cleanPayload._noToolInjection;
+                      logger.info(
+                        { restoredToolCount: STANDARD_TOOLS.length },
+                        '[CLASSIFIER] Restored STANDARD_TOOLS for classifier retry'
+                      );
+                    }
 
-          cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
-          cleanPayload.messages.push({
-            role: 'user',
-            content: `Please stop narrating what you are about to do and just call the tools directly ` +
-                     `(classifier retry ${classifierRetries}/${MAX_CLASSIFIER_RETRIES}).`,
-          });
+                    cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
+                    cleanPayload.messages.push({
+                      role: 'user',
+                      content: `Please stop narrating what you are about to do and just call the tools directly ` +
+                              `(classifier retry ${classifierRetries}/${MAX_CLASSIFIER_RETRIES}).`,
+                    });
 
-          logger.info({
-            sessionId: session?.id ?? null,
-            step: steps,
-            variant: 'CLASSIFIER_RETRY',
-            retryCount: classifierRetries,
-          }, '[LET-ME] Executing: Classifier Retry (YES detected)');
+                    logger.info({
+                      sessionId: session?.id ?? null,
+                      step: steps,
+                      variant: 'CLASSIFIER_RETRY',
+                      retryCount: classifierRetries,
+                    }, '[LET-ME] Executing: Classifier Retry (YES detected)');
 
-          continue;
-        }
+                    continue;
+                  }
 
-        // ===== APPROACH 1 & 2: Smart narration pattern detection with tool generation =====
-        // Match: "Let me...", "Now let me...", "First let me...", "I'll...", "I'm going to..."
-        const narrationPatterns = [
-          /^(?:Now\s+|First\s+)?Let me\s+(\w+)/i,
-          /^I'll\s+(\w+)/i,
-          /^I'm going to\s+(\w+)/i,
-          /^Let me\s+(\w+)/i,
-        ];
+                  // ===== APPROACH 1 & 2: Smart narration pattern detection with tool generation =====
+                  // Match: "Let me...", "Now let me...", "First let me...", "I'll...", "I'm going to..."
+                  const narrationPatterns = [
+                    /^(?:Now\s+|First\s+)?Let me\s+(\w+)/i,
+                    /^I'll\s+(\w+)/i,
+                    /^I'm going to\s+(\w+)/i,
+                    /^Let me\s+(\w+)/i,
+                  ];
 
-        let letMeMatch = null;
-        for (const pattern of narrationPatterns) {
-          letMeMatch = rawTextContent.match(pattern);
-          if (letMeMatch) break;
-        }
+                  let letMeMatch = null;
+                  for (const pattern of narrationPatterns) {
+                    letMeMatch = rawTextContent.match(pattern);
+                    if (letMeMatch) break;
+                  }
 
-        if (letMeMatch && (!classifierText || classifierText.trim().length === 0)) {
-          const action = letMeMatch[1].toLowerCase();
+                  if (letMeMatch && (!classifierText || classifierText.trim().length === 0)) {
+                    const action = letMeMatch[1].toLowerCase();
 
-          logger.info({
-            sessionId: session?.id ?? null,
-            step: steps,
-            detectedAction: action,
-            classifierAnswer: classifierText || '(empty)',
-            rawPreview: rawTextContent.slice(0, 100),
-          }, `[LET-ME] Detected "Let me ${action}..." pattern`);
+                    logger.info({
+                      sessionId: session?.id ?? null,
+                      step: steps,
+                      detectedAction: action,
+                      classifierAnswer: classifierText || '(empty)',
+                      rawPreview: rawTextContent.slice(0, 100),
+                    }, `[LET-ME] Detected "Let me ${action}..." pattern`);
 
-          // Attempt Approach 2: Generate synthetic tool calls for common actions
-          const generatedToolCalls = attemptGenerateToolCallsFromAction(action, rawTextContent, cleanPayload);
+                    // Attempt Approach 2: Generate synthetic tool calls for common actions
+                    const generatedToolCalls = attemptGenerateToolCallsFromAction(action, rawTextContent, cleanPayload);
 
-          if (generatedToolCalls && generatedToolCalls.length > 0) {
-            // Approach 2 succeeded - inject synthetic tool calls
-            logger.info({
-              sessionId: session?.id ?? null,
-              step: steps,
-              variant: 'AUTO_TOOL_GENERATION',
-              action: action,
-              generatedCount: generatedToolCalls.length,
-              toolNames: generatedToolCalls.map(tc => tc.name || tc.function?.name),
-            }, '[LET-ME] Executing: Auto Tool Generation (Approach 2)');
+                    if (generatedToolCalls && generatedToolCalls.length > 0) {
+                      // Approach 2 succeeded - inject synthetic tool calls
+                      logger.info({
+                        sessionId: session?.id ?? null,
+                        step: steps,
+                        variant: 'AUTO_TOOL_GENERATION',
+                        action: action,
+                        generatedCount: generatedToolCalls.length,
+                        toolNames: generatedToolCalls.map(tc => tc.name || tc.function?.name),
+                      }, '[LET-ME] Executing: Auto Tool Generation (Approach 2)');
 
-            // Inject the synthetic tool calls
-            cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
-            toolCalls = generatedToolCalls;
-            // Skip the normal tool call processing and go straight to execution
-            if (toolCalls.length > 0) {
-              // Mark that we're using synthetic calls from "Let me..." pattern
-              cleanPayload._letMeSynthetic = true;
-            }
-          } else {
-            // Approach 2 failed or not applicable - fallback to Approach 1: Smart retry
-            logger.info({
-              sessionId: session?.id ?? null,
-              step: steps,
-              variant: 'SMART_RETRY',
-              action: action,
-            }, '[LET-ME] Executing: Smart Retry (Approach 1) - tool generation not possible');
+                      // Inject the synthetic tool calls
+                      cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
+                      toolCalls = generatedToolCalls;
+                      // Skip the normal tool call processing and go straight to execution
+                      if (toolCalls.length > 0) {
+                        // Mark that we're using synthetic calls from "Let me..." pattern
+                        cleanPayload._letMeSynthetic = true;
+                      }
+                    } else {
+                      // Approach 2 failed or not applicable - fallback to Approach 1: Smart retry
+                      logger.info({
+                        sessionId: session?.id ?? null,
+                        step: steps,
+                        variant: 'SMART_RETRY',
+                        action: action,
+                      }, '[LET-ME] Executing: Smart Retry (Approach 1) - tool generation not possible');
 
-            classifierRetries++;
-            cleanPayload._invokeTextRetry = true;
+                      classifierRetries++;
+                      cleanPayload._invokeTextRetry = true;
 
-            // Restore tools if smart-selection stripped them
-            if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
-              const { STANDARD_TOOLS } = require('../clients/standard-tools');
-              cleanPayload.tools = STANDARD_TOOLS;
-              delete cleanPayload._noToolInjection;
-            }
+                      // Restore tools if smart-selection stripped them
+                      if (cleanPayload._noToolInjection || !Array.isArray(cleanPayload.tools) || cleanPayload.tools.length === 0) {
+                        const { STANDARD_TOOLS } = require('../clients/standard-tools');
+                        cleanPayload.tools = STANDARD_TOOLS;
+                        delete cleanPayload._noToolInjection;
+                      }
 
-            cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
-            cleanPayload.messages.push({
-              role: 'user',
-              content: `Don't narrate what you're about to do - actually execute the ${action} operation now by calling the appropriate tools directly.`,
-            });
+                      cleanPayload.messages.push({ role: 'assistant', content: rawTextContent });
+                      cleanPayload.messages.push({
+                        role: 'user',
+                        content: `Don't narrate what you're about to do - actually execute the ${action} operation now by calling the appropriate tools directly.`,
+                      });
 
-            continue;
-          }
-        }
-      } catch (err) {
-        logger.warn(
-          { sessionId: session?.id ?? null, step: steps, err: err.message },
-          '[CLASSIFIER] Classifier call failed — falling through to normal response'
-        );
-      }
+                      continue;
+                    }
+                  }
+                } catch (err) {
+                  logger.warn(
+                    { sessionId: session?.id ?? null, step: steps, err: err.message },
+                    '[CLASSIFIER] Classifier call failed — falling through to normal response'
+                  );
+                }
+              }
     }
 
     if (toolCalls.length > 0) {
@@ -4017,7 +4020,9 @@ To increase the limit: Set POLICY_MAX_TOOL_CALLS_PER_REQUEST`,
         lastMessageRole: cleanPayload.messages[cleanPayload.messages.length - 1]?.role,
       }, "Tool execution complete");
 
-      continue; // Loop back to invoke model with tool results in context
+      if (1 == 0) { // BJÖRN
+        //continue; // Loop back to invoke model with tool results in context
+      }
     }
 
     let anthropicPayload;
@@ -4278,67 +4283,69 @@ To increase the limit: Set POLICY_MAX_TOOL_CALLS_PER_REQUEST`,
       );
       anthropicPayload.content = policy.sanitiseContent(anthropicPayload.content);
     }
+    
+    if (1 == 0) { // BJÖRN
+              // === EMPTY RESPONSE DETECTION (safety net — post-conversion) === // BJÖRN
+              // Primary detection is earlier (before tool handling). This catches edge cases
+              // where conversion produces empty content from non-empty raw data.
+              const hasTextContent = (() => {
+                if (Array.isArray(anthropicPayload.content)) {
+                  return anthropicPayload.content.some(b => b.type === "text" && b.text?.trim());
+                }
+                if (typeof anthropicPayload.content === "string") {
+                  return anthropicPayload.content.trim().length > 0;
+                }
+                return false;
+              })();
 
-    // === EMPTY RESPONSE DETECTION (safety net — post-conversion) ===
-    // Primary detection is earlier (before tool handling). This catches edge cases
-    // where conversion produces empty content from non-empty raw data.
-    const hasTextContent = (() => {
-      if (Array.isArray(anthropicPayload.content)) {
-        return anthropicPayload.content.some(b => b.type === "text" && b.text?.trim());
-      }
-      if (typeof anthropicPayload.content === "string") {
-        return anthropicPayload.content.trim().length > 0;
-      }
-      return false;
-    })();
+              const hasToolUseBlocks = Array.isArray(anthropicPayload.content) &&
+                anthropicPayload.content.some(b => b.type === "tool_use");
 
-    const hasToolUseBlocks = Array.isArray(anthropicPayload.content) &&
-      anthropicPayload.content.some(b => b.type === "tool_use");
+              if (!hasToolUseBlocks && !hasTextContent) { // BJÖRN KRITISCH!!!
+                logger.warn({
+                  sessionId: session?.id ?? null,
+                  step: steps,
+                  messageKeys: Object.keys(anthropicPayload),
+                  contentType: typeof anthropicPayload.content,
+                  contentLength: Array.isArray(anthropicPayload.content) ? anthropicPayload.content.length : String(anthropicPayload.content || "").length,
+                }, "Empty LLM response detected (no text, no tool calls)");
 
-    if (!hasToolUseBlocks && !hasTextContent) {
-      logger.warn({
-        sessionId: session?.id ?? null,
-        step: steps,
-        messageKeys: Object.keys(anthropicPayload),
-        contentType: typeof anthropicPayload.content,
-        contentLength: Array.isArray(anthropicPayload.content) ? anthropicPayload.content.length : String(anthropicPayload.content || "").length,
-      }, "Empty LLM response detected (no text, no tool calls)");
+                // Retry once with a nudge
+                if (steps < settings.maxSteps && !emptyResponseRetried) {
+                  emptyResponseRetried = true;
+                  cleanPayload.messages.push({
+                    role: "assistant",
+                    content: "",
+                  });
+                  cleanPayload.messages.push({
+                    role: "user",
+                    content: "Please provide a response to the user's message.",
+                  });
+                  logger.info({ sessionId: session?.id ?? null }, "Retrying after empty response with nudge");
+                  continue;  // Go back to top of while loop
+                }
 
-      // Retry once with a nudge
-      if (steps < settings.maxSteps && !emptyResponseRetried) {
-        emptyResponseRetried = true;
-        cleanPayload.messages.push({
-          role: "assistant",
-          content: "",
-        });
-        cleanPayload.messages.push({
-          role: "user",
-          content: "Please provide a response to the user's message.",
-        });
-        logger.info({ sessionId: session?.id ?? null }, "Retrying after empty response with nudge");
-        continue;  // Go back to top of while loop
-      }
-
-      // If retry also returned empty, return a fallback message
-      logger.warn({ sessionId: session?.id ?? null, steps }, "Empty response persisted after retry");
-      return {
-        response: {
-          status: 200,
-          body: {
-            id: `msg_${Date.now()}`,
-            type: "message",
-            role: "assistant",
-            model: requestedModel,
-            content: [{ type: "text", text: "I wasn't able to generate a response. Could you try rephrasing your message?" }],
-            stop_reason: "end_turn",
-            usage: { input_tokens: 0, output_tokens: 0 },
-          },
-          terminationReason: "empty_response_fallback",
-        },
-        steps,
-        durationMs: Date.now() - start,
-        terminationReason: "empty_response_fallback",
-      };
+                // If retry also returned empty, return a fallback message
+                logger.warn({ sessionId: session?.id ?? null, steps }, "Empty response persisted after retry");
+                return {
+                  response: {
+                    status: 200,
+                    body: {
+                      id: `msg_${Date.now()}`,
+                      type: "message",
+                      role: "assistant",
+                      model: requestedModel,
+                      content: [{ type: "text", text: "I wasn't able to generate a response. Could you try rephrasing your message?" }],
+                      stop_reason: "end_turn",
+                      usage: { input_tokens: 0, output_tokens: 0 },
+                    },
+                    terminationReason: "empty_response_fallback",
+                  },
+                  steps,
+                  durationMs: Date.now() - start,
+                  terminationReason: "empty_response_fallback",
+                };
+              }
     }
 
     // Ensure content is an array before calling .find()
@@ -4699,10 +4706,10 @@ To increase the limit: Set POLICY_MAX_TOOL_CALLS_PER_REQUEST`,
         warnings: limitWarnings,
       }, "Agent loop completed near limits — appending warning to response");
 
-      // Append warning text block to the response content
-      if (Array.isArray(anthropicPayload?.content)) {
-        anthropicPayload.content.push({ type: "text", text: warningText });
-      }
+      // Append warning text block to the response content // REMOVE!!!
+//      if (Array.isArray(anthropicPayload?.content)) {
+//        anthropicPayload.content.push({ type: "text", text: warningText });
+//      }
     }
 
     logger.info(
@@ -4945,8 +4952,8 @@ function detectTopicDetection(payload) {
 
 async function processMessage({ payload, headers, session, cwd, options = {} }) {
   const requestedModel =
-    payload?.model ??
     config.modelProvider?.defaultModel ??
+    payload?.model ??
     "claude-3-unknown";
   const wantsThinking =
     typeof headers?.["anthropic-beta"] === "string" &&
