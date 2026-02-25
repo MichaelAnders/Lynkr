@@ -424,14 +424,8 @@ const databricksUrl =
     : null;
 
 // Set MODEL_DEFAULT env var to use a specific model (e.g. "llama3.1" for Ollama).
-// Without it, the default falls back to a Databricks Claude model regardless of MODEL_PROVIDER.
-const defaultModel =
-  process.env.MODEL_DEFAULT ??
-  (modelProvider === "azure-anthropic" ? "claude-opus-4-5" : "databricks-claude-sonnet-4-5");
-
-// Force server-side model configuration, ignoring client requests
-// Useful when you want to enforce a specific model regardless of what the client asks for
-const enforceServerModel = process.env.ENFORCE_SERVER_MODEL?.toLowerCase() === "true";
+// When not set, defaultModel is null and provider-specific config is authoritative.
+const defaultModel = process.env.MODEL_DEFAULT?.trim() || null;
 
 const port = Number.parseInt(process.env.PORT ?? "8080", 10);
 const sessionDbPath =
@@ -686,7 +680,6 @@ var config = {
   modelProvider: {
     type: modelProvider,
     defaultModel,
-    enforceServerModel,
     suggestionModeModel,
     topicDetectionModel,
     // Hybrid routing settings
