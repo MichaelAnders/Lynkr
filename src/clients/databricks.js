@@ -481,7 +481,7 @@ async function invokeOpenRouter(body) {
   }
 
   const openRouterBody = {
-    model: body._suggestionModeModel || config.openrouter.model,
+    model: config.openrouter?.model || body._suggestionModeModel || body.model,
     messages,
     temperature: body.temperature ?? 0.7,
     max_tokens: body.max_tokens ?? 4096,
@@ -1351,8 +1351,8 @@ async function invokeZai(body) {
     "claude-3-haiku": "glm-4.5-air",
   };
 
-  const requestedModel = body.model || config.zai.model;
-  let mappedModel = modelMap[requestedModel] || config.zai.model || "glm-4.7";
+  const requestedModel = config.zai?.model || body.model;
+  let mappedModel = modelMap[requestedModel] || config.zai?.model || "glm-4.7";
   mappedModel = mappedModel.toLowerCase();
 
   let zaiBody;
@@ -1650,9 +1650,9 @@ async function invokeVertex(body) {
     "claude-opus-4-5": "gemini-2.5-pro",
   };
 
-  // Map model name
-  const requestedModel = body.model || config.vertex.model;
-  const geminiModel = modelMap[requestedModel] || config.vertex.model || "gemini-2.0-flash";
+  // Map model name - provider config takes priority
+  const requestedModel = config.vertex?.model || body.model;
+  const geminiModel = modelMap[requestedModel] || config.vertex?.model || "gemini-2.0-flash";
 
   // Construct Gemini API endpoint
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
