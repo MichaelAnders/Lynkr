@@ -2,6 +2,13 @@ node_modules/
 data/
 *.db
 logs/
+# Beads issue tracker (local state)
+.beads/
+beads/
+# Dolt version control (local state)
+.dolt/
+# Log deduplication map (session-generated, do not commit)
+src/logger/dedup-map.json
 npm-debug.log
 SUBAGENT_IMPLEMENTATION_PLAN_V2.md
 .DS_Store

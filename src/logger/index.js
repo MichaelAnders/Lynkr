@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../config");
 const { createOversizedErrorStream } = require("./oversized-error-stream");
+const { createLogDeduplicator } = require("./log-deduplicator");
 
 /**
  * Application logger using Pino
@@ -95,6 +96,8 @@ const logger = pino(
 		base: {
 			env: config.env,
 		},
+		// Enable caller location info (file, line, function) for debugging
+		caller: process.env.LOG_CALLER === "true" || config.env === "development",
 		// Use local timezone for timestamps instead of UTC
 		timestamp: () => {
 			const now = new Date();
@@ -126,4 +129,36 @@ const logger = pino(
 	pino.multistream(streams),
 );
 
-module.exports = logger;
+// --- Log deduplication proxy ---
+// Controlled by LOG_DEDUP env var (default: "true")
+// Wraps each log method so that log objects are deduplicated before Pino processes them.
+// The proxy is transparent to Pino internals (child, bindings, stream, etc.) —
+// only the six logging methods are intercepted.
+const LOG_METHODS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
+const dedupEnabled = process.env.LOG_DEDUP !== 'false';
+
+if (dedupEnabled) {
+	const deduplicator = createLogDeduplicator();
+
+	const dedupProxy = new Proxy(logger, {
+		get(target, prop, receiver) {
+			if (LOG_METHODS.includes(prop)) {
+				return function (...args) {
+					// Pino log method signatures:
+					//   logger.info(obj, msg?, ...args)  — first arg is an object
+					//   logger.info(msg, ...args)        — first arg is a string
+					if (args.length > 0 && args[0] !== null && typeof args[0] === 'object') {
+						args[0] = deduplicator.deduplicateObject(args[0]);
+					}
+					return target[prop].apply(target, args);
+				};
+			}
+			// For everything else (child, bindings, level, etc.), pass through
+			return Reflect.get(target, prop, receiver);
+		},
+	});
+
+	module.exports = dedupProxy;
+} else {
+	module.exports = logger;
+}
